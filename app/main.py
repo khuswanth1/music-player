@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 
 from app.api.v1 import admin, auth, billing, catalog, discovery, library, music, playlists, sessions, streaming, users
@@ -64,6 +65,10 @@ def create_app() -> FastAPI:
         api.include_router(module.router)
     api.include_router(ws.router)
     app.include_router(api)
+
+    @app.get("/", include_in_schema=False)
+    def root():
+        return RedirectResponse(url="/docs")
 
     @app.get("/health", tags=["health"], summary="Liveness")
     def health():

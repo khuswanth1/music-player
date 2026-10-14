@@ -95,7 +95,7 @@ class MusicProvider(ABC):
         """Current state of one track, for rights re-verification. None if the provider no longer has it."""
         return None
 
-    def playback_url(self, provider_track_id: str, stored_url: str) -> str:
+    def playback_url(self, provider_track_id: str, stored_url: str, *, title: str | None = None, artist: str | None = None) -> str:
         """The URL handed to the player. Override when stored URLs expire (e.g. signed URLs)."""
         return stored_url
 

@@ -206,7 +206,13 @@ def search(
     if isinstance(results.get("podcasts"), tuple):
         found, statuses = results["podcasts"]
         out.podcasts = podcast_svc.podcast_outs(db, user, found[:12])
-        out.providers += statuses
+        existing_keys = {p.key for p in out.providers}
+        out.providers += [
+            ProviderStatusOut(key=f"podcasts_{s.key}", name=s.name, status=s.status, count=s.count, message=s.message)
+            if s.key in existing_keys
+            else s
+            for s in statuses
+        ]
         if h.era == "latest":
             out.podcasts.sort(key=lambda p: p.latest_episode_at.timestamp() if p.latest_episode_at else 0, reverse=True)
     if isinstance(results.get("episodes"), tuple):

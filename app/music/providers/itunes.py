@@ -182,5 +182,18 @@ class ITunesProvider(MusicProvider):
             return None
         return None
 
-    def playback_url(self, provider_track_id: str, stored_url: str) -> str:
+    def playback_url(self, provider_track_id: str, stored_url: str, *, title: str | None = None, artist: str | None = None) -> str:
+        from app.music.resolver import resolve_full_stream
+
+        if not title:
+            track = self.fetch_track(provider_track_id)
+            if track:
+                title = track.title
+                artist = track.artist_name
+
+        if title:
+            full_url, _ = resolve_full_stream(title, artist, fallback_url=stored_url)
+            if full_url:
+                return full_url
+
         return stored_url

@@ -8,13 +8,15 @@ from app.music.providers.audius import AudiusProvider
 from app.music.providers.base import Capability, MetadataRecording, MusicProvider, ProviderTrack
 from app.music.providers.ccmixter import CcMixterProvider
 from app.music.providers.internet_archive import InternetArchiveProvider
+from app.music.providers.itunes import ITunesProvider
 from app.music.providers.jamendo import JamendoProvider
 from app.music.providers.musicbrainz import MusicBrainzProvider
 from app.music.providers.openverse import OpenverseProvider
+from app.music.providers.wikimedia import WikimediaCommonsProvider
 
 _FACTORIES: dict[str, type[MusicProvider]] = {
     cls.key: cls for cls in (JamendoProvider, InternetArchiveProvider, AudiusProvider, OpenverseProvider,
-                             CcMixterProvider, MusicBrainzProvider)
+                             CcMixterProvider, MusicBrainzProvider, ITunesProvider, WikimediaCommonsProvider)
 }
 _instances: dict[str, MusicProvider] = {}
 _lock = threading.Lock()

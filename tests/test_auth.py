@@ -222,3 +222,22 @@ def test_login_code_guessing_and_resend_limits(client, factory, monkeypatch, set
     assert burned.status_code == 401  # the right code no longer works after too many guesses
     malformed = client.post("/api/v1/auth/login-code/verify", json={"email": user.email, "code": "12ab56"})
     assert malformed.status_code == 422
+
+
+def test_refresh_cookie_is_scoped_and_the_old_root_cookie_is_expired(client, factory):
+    user = factory.user()
+    res = client.post("/api/v1/auth/login", json={"email": user.email, "password": PASSWORD})
+    cookies = res.headers.get_list("set-cookie")
+    scoped = [c for c in cookies if "wavely_refresh=" in c and "Path=/api/v1/auth" in c and "HttpOnly" in c]
+    legacy = [c for c in cookies if "wavely_refresh=" in c and "Path=/;" in c]
+    assert len(scoped) == 1 and not scoped[0].startswith('wavely_refresh="";')
+    assert len(legacy) == 1 and "Max-Age=0" in legacy[0]
+
+
+def test_refresh_token_is_never_accepted_from_the_url(client, factory):
+    user = factory.user()
+    client.post("/api/v1/auth/login", json={"email": user.email, "password": PASSWORD})
+    token = client.cookies.get("wavely_refresh")
+    client.cookies.clear()
+    assert client.post("/api/v1/auth/refresh", params={"refresh_token": token}).status_code == 401
+    assert client.post("/api/v1/auth/refresh", headers={"X-Refresh-Token": token}).status_code == 200

@@ -27,10 +27,15 @@ class SearchResults(BaseModel):
 
 
 @router.get("/search", response_model=SearchResults)
-def search(db: DB, user: OptionalUser, page: PageParams,
-           q: Annotated[str, Query(min_length=1, max_length=100)],
-           type: Annotated[str, Query(description="Comma-separated: song,artist,album,playlist")] = "song,artist,album,playlist",
-           genre: str | None = None, sort: svc.SearchSort = "relevance"):
+def search(
+    db: DB,
+    user: OptionalUser,
+    page: PageParams,
+    q: Annotated[str, Query(min_length=1, max_length=100)],
+    type: Annotated[str, Query(description="Comma-separated: song,artist,album,playlist")] = "song,artist,album,playlist",
+    genre: str | None = None,
+    sort: svc.SearchSort = "relevance",
+):
     q = q.strip()
     types = {t.strip() for t in type.split(",")}
     result = SearchResults(query=q)
@@ -72,25 +77,44 @@ class HomeFeed(BaseModel):
 
 @router.get("/browse/home", response_model=HomeFeed, summary="Everything the home screen needs in one call")
 def home(db: DB, user: OptionalUser):
-    featured = db.scalars(select(Album).where(Album.is_featured.is_(True))
-                          .order_by(Album.release_date.desc().nulls_last()).limit(8)).unique().all()
-    new_releases = db.scalars(select(Album).order_by(Album.release_date.desc().nulls_last(), Album.id).limit(10)).unique().all()
+    has_audio = Album.id.in_(select(Song.album_id).where(playable_condition()))  # albums nobody can play aren't shelved
+    featured = (
+        db.scalars(select(Album).where(Album.is_featured.is_(True), has_audio).order_by(Album.release_date.desc().nulls_last()).limit(8))
+        .unique()
+        .all()
+    )
+    new_releases = (
+        db.scalars(select(Album).where(has_audio).order_by(Album.release_date.desc().nulls_last(), Album.id).limit(10)).unique().all()
+    )
     trending = svc.trending_songs(db, 10)
     recommended = svc.recommendations(db, user, 12) if user else []
     recent = recently_played_songs(db, user, 8) if user else []
-    playlists = db.scalars(select(Playlist).where(Playlist.is_public.is_(True))
-                           .order_by(Playlist.updated_at.desc()).limit(8)).unique().all()
-    counts = (select(Song.language, func.count().label("n")).where(playable_condition(), Song.language.is_not(None))
-              .group_by(Song.language).subquery())
-    languages = [HomeLanguage(code=lang.code, name=lang.name, native_name=lang.native_name, playable_count=n)
-                 for lang, n in db.execute(select(Language, counts.c.n).join(counts, counts.c.language == Language.code)
-                                           .order_by(Language.featured_rank.nulls_last(), counts.c.n.desc()).limit(16))]
+    playlists = (
+        db.scalars(select(Playlist).where(Playlist.is_public.is_(True)).order_by(Playlist.updated_at.desc()).limit(8)).unique().all()
+    )
+    counts = (
+        select(Song.language, func.count().label("n"))
+        .where(playable_condition(), Song.language.is_not(None))
+        .group_by(Song.language)
+        .subquery()
+    )
+    languages = [
+        HomeLanguage(code=lang.code, name=lang.name, native_name=lang.native_name, playable_count=n)
+        for lang, n in db.execute(
+            select(Language, counts.c.n)
+            .join(counts, counts.c.language == Language.code)
+            .order_by(Language.featured_rank.nulls_last(), counts.c.n.desc())
+            .limit(16)
+        )
+    ]
     preferred = list(user.preferred_languages or []) if user else []
-    in_your_languages = (db.scalars(svc.popular_songs(12).where(Song.language.in_(preferred))).unique().all()
-                         if preferred else [])
+    in_your_languages = db.scalars(svc.popular_songs(12).where(Song.language.in_(preferred))).unique().all() if preferred else []
     return HomeFeed(
-        languages=languages, in_your_languages=catalog_svc.song_outs(db, user, in_your_languages),
-        featured=featured, new_releases=new_releases, trending=catalog_svc.song_outs(db, user, trending),
+        languages=languages,
+        in_your_languages=catalog_svc.song_outs(db, user, in_your_languages),
+        featured=featured,
+        new_releases=new_releases,
+        trending=catalog_svc.song_outs(db, user, trending),
         recommended=catalog_svc.song_outs(db, user, recommended),
         recently_played=catalog_svc.song_outs(db, user, recent),
         genres=db.scalars(select(Genre).order_by(Genre.name)).all(),
@@ -100,7 +124,10 @@ def home(db: DB, user: OptionalUser):
 
 @router.get("/browse/new-releases", response_model=Page[AlbumOut])
 def new_releases(db: DB, page: PageParams):
-    items, total = paginate(db, select(Album).order_by(Album.release_date.desc().nulls_last(), Album.id), page.offset, page.page_size)
+    playable = Album.id.in_(select(Song.album_id).where(playable_condition()))
+    items, total = paginate(
+        db, select(Album).where(playable).order_by(Album.release_date.desc().nulls_last(), Album.id), page.offset, page.page_size
+    )
     return Page.build(items, total, page.page, page.page_size)
 
 

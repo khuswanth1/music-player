@@ -38,6 +38,7 @@ async def _music_jobs(ticks: int) -> None:
     if settings.catalog_sync_enabled and ticks % max(1, settings.catalog_sync_every_ticks) == 0:
         try:
             await asyncio.to_thread(federation.sync_tick)
+            await asyncio.to_thread(federation.genre_sync_tick)
         except Exception:
             log.exception("worker.music_sync_error")
     try:

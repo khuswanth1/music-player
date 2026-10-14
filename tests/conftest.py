@@ -43,7 +43,14 @@ os.environ.update({
     "GOOGLE_CLIENT_ID": "",
     "GOOGLE_CLIENT_SECRET": "",
     "JAMENDO_CLIENT_ID": "",
+    "MUSIC_USER_AGENT": "Wavely-tests/1.0 (+https://example.test/contact)",
 })
+
+# Settings prefers backend/.env over real environment variables, which would silently point the suite at the
+# developer's own database (and TRUNCATE it between tests). Tests get their configuration from the variables above.
+from app.core.config import Settings  # noqa: E402
+
+Settings.model_config["env_file"] = None
 
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -63,6 +70,9 @@ _PASSWORD_HASH = hash_password(PASSWORD)  # hashing is deliberately slow; do it 
 
 @pytest.fixture(scope="session", autouse=True)
 def migrated_db():
+    # Last line of defence: these tests TRUNCATE every table, so refuse to run against anything but a *_test database.
+    if not (engine.url.database or "").endswith("_test"):
+        pytest.exit(f"Refusing to run: the app is connected to '{engine.url.database}', not a *_test database", returncode=2)
     cfg = Config(str(BACKEND / "alembic.ini"))
     cfg.set_main_option("script_location", str(BACKEND / "alembic"))
     cfg.cmd_opts = type("Opts", (), {"x": [f"url={TEST_DB}"]})()

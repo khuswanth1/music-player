@@ -34,10 +34,8 @@ from app.schemas.music import (
     DownloadOut,
     FetchResultOut,
     GenreCount,
-    GlobalSearchOut,
     LanguageDetail,
     LanguageOut,
-    MetadataRecordingOut,
     PreferredLanguages,
     ProviderOut,
     ProviderPolicyOut,
@@ -190,22 +188,6 @@ def _provider_out(p, counts) -> dict:
 def list_providers(db: DB):
     counts = _provider_counts(db)
     return [ProviderOut(**_provider_out(p, counts)) for p in known_providers()]
-
-
-# --- federated search ----------------------------------------------------------------------------
-
-@router.get("/search/global", response_model=GlobalSearchOut, tags=["discovery"], dependencies=[_provider_fanout_limit],
-            summary="Search every enabled provider at once; results are added to the catalog with their rights")
-def global_search(db: DB, user: OptionalUser, q: Annotated[str, Query(min_length=2, max_length=100)],
-                  language: str | None = None, limit: int = Query(20, ge=1, le=40)):
-    code = None
-    if language:
-        code = _get_language(db, language).code
-    found = federation.global_search(db, q.strip(), language=code, limit=limit)
-    return GlobalSearchOut(
-        query=q.strip(), language=code, songs=catalog_svc.song_outs(db, user, found.songs),
-        providers=_statuses(found.statuses),
-        metadata_only=[MetadataRecordingOut(**vars(r)) for r in found.metadata_only])
 
 
 # --- charts --------------------------------------------------------------------------------------

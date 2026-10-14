@@ -81,13 +81,32 @@ def set_transport(transport: httpx.BaseTransport | None) -> None:
         _buckets.clear()
 
 
+def _public_only(request: httpx.Request) -> None:
+    """Runs before every request - including each redirect hop - of clients that fetch publisher-supplied URLs."""
+    from app.podcasts.providers import public_http_url
+
+    if not public_http_url(str(request.url)):
+        raise httpx.UnsupportedProtocol("Blocked: not a public web address")
+
+
+def _size_capped(response: httpx.Response) -> None:
+    limit = get_settings().rss_max_bytes
+    if int(response.headers.get("content-length") or 0) > limit:
+        raise httpx.TooManyRedirects("Blocked: response too large", request=response.request)
+
+
+# Providers whose URLs come from third-party data (podcast feeds) rather than from our own adapter code.
+_UNTRUSTED_URLS = {"rss"}
+
+
 def _client(provider: str) -> httpx.Client:
     with _registry_lock:
         if provider not in _clients:
             settings = get_settings()
+            hooks = {"request": [_public_only], "response": [_size_capped]} if provider in _UNTRUSTED_URLS else {}
             _clients[provider] = httpx.Client(
                 transport=_transport, timeout=settings.music_http_timeout_seconds, follow_redirects=True,
-                headers={"User-Agent": settings.music_user_agent, "Accept": "application/json"})
+                headers={"User-Agent": settings.music_user_agent, "Accept": "application/json"}, event_hooks=hooks)
         return _clients[provider]
 
 
@@ -101,18 +120,45 @@ def cache_key(provider: str, url: str, params: dict | None) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+_MEM_CACHE: dict[str, tuple[Any, float]] = {}
+_MEM_CACHE_LOCK = threading.Lock()
+_MEM_CACHE_MAX_ENTRIES = 5000
+
+
 def _cache_get(key: str) -> Any | None:
+    now_m = time.monotonic()
+    with _MEM_CACHE_LOCK:
+        if key in _MEM_CACHE:
+            body, exp = _MEM_CACHE[key]
+            if exp > now_m:
+                return body
+            del _MEM_CACHE[key]
+
     with SessionLocal() as db:
-        return db.scalar(select(ProviderCache.body).where(ProviderCache.key == key, ProviderCache.expires_at > utcnow()))
+        res = db.scalar(select(ProviderCache.body).where(ProviderCache.key == key, ProviderCache.expires_at > utcnow()))
+        if res is not None:
+            with _MEM_CACHE_LOCK:
+                if len(_MEM_CACHE) > _MEM_CACHE_MAX_ENTRIES:
+                    _MEM_CACHE.clear()
+                _MEM_CACHE[key] = (res, now_m + 1800)  # 30 min memory cache
+        return res
 
 
 def _cache_put(key: str, provider: str, url: str, body: Any, ttl: timedelta) -> None:
+    now_m = time.monotonic()
+    ttl_seconds = ttl.total_seconds()
+    with _MEM_CACHE_LOCK:
+        if len(_MEM_CACHE) > _MEM_CACHE_MAX_ENTRIES:
+            _MEM_CACHE.clear()
+        _MEM_CACHE[key] = (body, now_m + min(ttl_seconds, 1800))
+
     now = utcnow()
     values = {"provider": provider, "url": url[:2000], "body": body, "fetched_at": now, "expires_at": now + ttl}
     with SessionLocal() as db:
         db.execute(insert(ProviderCache).values(key=key, **values)
                    .on_conflict_do_update(index_elements=[ProviderCache.key], set_=values))
         db.commit()
+
 
 
 def _count_request(provider: str, quota: int | None) -> None:
@@ -160,8 +206,14 @@ class ProviderClient:
         self.rate, self.burst, self.quota = rate_per_second, burst, daily_quota
         self.ttl = ttl or timedelta(minutes=get_settings().music_cache_ttl_minutes)
 
-    def get_json(self, url: str, params: dict | None = None, *, ttl: timedelta | None = None,
-                 cache: bool = True, max_wait: float = 3.0) -> Any:
+    def get_text(self, url: str, params: dict | None = None, *, headers: dict | None = None,
+                 ttl: timedelta | None = None, cache: bool = True, max_wait: float = 3.0) -> str:
+        """Like `get_json` for non-JSON bodies (RSS/XML). Cached as `{"text": ...}`."""
+        body = self.get_json(url, params, headers=headers, ttl=ttl, cache=cache, max_wait=max_wait, raw=True)
+        return body["text"]
+
+    def get_json(self, url: str, params: dict | None = None, *, headers: dict | None = None,
+                 ttl: timedelta | None = None, cache: bool = True, max_wait: float = 3.0, raw: bool = False) -> Any:
         params = {k: v for k, v in (params or {}).items() if v is not None}
         key = cache_key(self.provider, url, params)
         if cache:
@@ -175,7 +227,7 @@ class ProviderClient:
             if not _bucket(self.provider, self.rate, self.burst).acquire(max_wait):
                 raise ProviderError(self.provider, "rate_limited", "Local rate limit reached; try again shortly")
             try:
-                resp = _client(self.provider).get(url, params=params)
+                resp = _client(self.provider).get(url, params=params, headers=headers)
             except httpx.TimeoutException:
                 last_error = "timed out"
                 continue
@@ -198,6 +250,11 @@ class ProviderClient:
             if resp.status_code >= 400:
                 record_error(self.provider, f"HTTP {resp.status_code}")
                 raise ProviderError(self.provider, "bad_response", f"The provider rejected the request (HTTP {resp.status_code})")
+            if raw:
+                body = {"text": resp.text}
+                if cache:
+                    _cache_put(key, self.provider, url, body, ttl or self.ttl)
+                return body
             try:
                 body = resp.json()
             except ValueError as exc:

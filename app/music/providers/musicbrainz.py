@@ -59,6 +59,11 @@ class MusicBrainzProvider(MusicProvider):
         self.http = ProviderClient(self.key, rate_per_second=1, burst=1,
                                    daily_quota=get_settings().musicbrainz_daily_quota)
 
+    def is_configured(self) -> bool:
+        # MusicBrainz answers 503 to anonymous or placeholder User-Agents, so without real contact details in
+        # MUSIC_USER_AGENT every call would just fail. Better to say so than to look "busy".
+        return "your-org" not in get_settings().music_user_agent
+
     def search_recordings(self, query: str, *, limit: int = 10) -> list[MetadataRecording]:
         body = self.http.get_json(f"{API}/recording", {"query": _escape(query), "fmt": "json", "limit": limit},
                                   max_wait=5)
@@ -73,6 +78,59 @@ class MusicBrainzProvider(MusicProvider):
                 release_title=release.get("title"), release_date=release.get("date") or rec.get("first-release-date"),
                 url=f"https://musicbrainz.org/recording/{rec['id']}", isrc=(rec.get("isrcs") or [None])[0]))
         return out
+
+    def artist_country(self, name: str) -> tuple[uuid.UUID, str] | None:
+        """MusicBrainz's country for an artist, only when the match is certain: exact (normalized) name and a top score."""
+        body = self.http.get_json(f"{API}/artist", {"query": f'artist:"{_escape(name)}"', "fmt": "json", "limit": 3}, max_wait=10)
+        for a in body.get("artists") or []:
+            if (a.get("score") or 0) < 95 or _norm(a.get("name") or "") != _norm(name):
+                continue
+            country = a.get("country")
+            if country and len(country) == 2:
+                return uuid.UUID(a["id"]), country
+            return None  # the best match has no country on file: leave it Unknown
+        return None
+
+    def search_soundtracks(self, q: str, *, language: str | None = None, country: str | None = None,
+                           year_from: int | None = None, year_to: int | None = None, limit: int = 15) -> list[dict]:
+        """Soundtrack releases. MusicBrainz knows each release's language, country and date, so those filters are real."""
+        parts = ["secondarytype:soundtrack", "status:official"]
+        if q:
+            parts.append(f'release:"{_escape(q)}"')
+        if language and language in langs.BY_CODE:
+            parts.append(f"lang:{langs.BY_CODE[language].iso639_3}")
+        if country:
+            parts.append(f"country:{country.upper()}")
+        if year_from or year_to:
+            parts.append(f"date:[{year_from or 1900} TO {year_to or 2100}]")
+        body = self.http.get_json(f"{API}/release", {"query": " AND ".join(parts), "fmt": "json", "limit": limit}, max_wait=5)
+        out = []
+        for rel in body.get("releases") or []:
+            if (rel.get("score") or 0) < 70:
+                continue
+            country_code = rel.get("country") if len(rel.get("country") or "") == 2 else None
+            out.append({
+                "id": rel["id"], "title": rel.get("title") or "Untitled", "artist": _artist(rel.get("artist-credit")),
+                "date": rel.get("date"), "country": country_code,
+                "language": langs.normalize((rel.get("text-representation") or {}).get("language")),
+                "track_count": rel.get("track-count"), "url": f"https://musicbrainz.org/release/{rel['id']}",
+            })
+        return out
+
+    def release_tracks(self, mbid: str) -> dict:
+        detail = self.http.get_json(f"{API}/release/{mbid}", {"inc": "recordings+artist-credits", "fmt": "json"}, max_wait=8)
+        tracks = []
+        for medium in detail.get("media") or []:
+            for t in medium.get("tracks") or []:
+                rec = t.get("recording") or {}
+                tracks.append({"number": t.get("position"), "title": t.get("title") or rec.get("title") or "Untitled",
+                               "artist": _artist(t.get("artist-credit") or rec.get("artist-credit")),
+                               "duration_ms": t.get("length") or rec.get("length"),
+                               "url": f"https://musicbrainz.org/recording/{rec['id']}" if rec.get("id") else None})
+        return {"id": detail["id"], "title": detail.get("title"), "artist": _artist(detail.get("artist-credit")),
+                "date": detail.get("date"), "country": detail.get("country") if len(detail.get("country") or "") == 2 else None,
+                "language": langs.normalize((detail.get("text-representation") or {}).get("language")),
+                "url": f"https://musicbrainz.org/release/{detail['id']}", "tracks": tracks}
 
     def find_conflict(self, title: str, uploader: str, duration_ms: int | None) -> MetadataRecording | None:
         """An officially released recording with the same title and length by a *different* artist.

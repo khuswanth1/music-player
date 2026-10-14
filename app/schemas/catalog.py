@@ -136,11 +136,24 @@ class SongOut(ORMModel):
     license_name: str | None = None
     license_url: str | None = None
     attribution: str | None = None
+    country: str | None = Field(None, description="Release country (ISO 3166-1) when a provider states it; null = Unknown")
+    release_date: date | None = Field(None, description="Release date of the track's album, when known")
 
     @computed_field
     @property
     def source_name(self) -> str:
         return source_name(self.source)
+
+    @computed_field(description="`full` (complete recording), `preview` (provider's short clip) or `metadata` (cannot be played here)")
+    @property
+    def access(self) -> str:
+        if not (self.playable and self.has_audio):
+            return "metadata"
+        if self.source == "itunes" or self.license_code in ("full", None):
+            return "full"
+        return "preview" if self.license_code == "preview" else "full"
+
+
 
 
 class AlbumDetail(AlbumOut):

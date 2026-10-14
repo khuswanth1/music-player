@@ -8,7 +8,23 @@ from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy import text
 
-from app.api.v1 import admin, auth, billing, catalog, discovery, library, music, playlists, sessions, streaming, users
+from app.api.v1 import (
+    admin,
+    auth,
+    billing,
+    catalog,
+    discovery,
+    library,
+    music,
+    playlists,
+    podcasts,
+    private_albums,
+    search,
+    sessions,
+    streaming,
+    users,
+    worldmusic,
+)
 from app.core.config import get_settings
 from app.core.errors import register_error_handlers
 from app.core.logging import configure_logging
@@ -61,7 +77,10 @@ def create_app() -> FastAPI:
     app.add_middleware(RequestContextMiddleware, hsts=settings.environment == "production")
 
     api = APIRouter(prefix="/api/v1")
-    for module in (auth, users, catalog, streaming, playlists, library, discovery, music, billing, sessions, admin):
+    for module in (
+        auth, search, users, worldmusic, catalog, streaming, playlists, library, discovery, music, podcasts, private_albums,
+        billing, sessions, admin,
+    ):
         api.include_router(module.router)
     api.include_router(ws.router)
     app.include_router(api)

@@ -66,6 +66,7 @@ class Artist(UUIDPk, Timestamps, ProviderRef, Base):
     source_url: Mapped[str | None] = mapped_column(String(1000))
     musicbrainz_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     country: Mapped[str | None] = mapped_column(String(2))  # ISO 3166-1 alpha-2
+    country_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # MusicBrainz lookup done
 
     albums: Mapped[list[Album]] = relationship(back_populates="artist", order_by="Album.release_date.desc().nulls_last()")
 
@@ -153,11 +154,23 @@ class Song(UUIDPk, Timestamps, ProviderRef, Base):
         return self.source == LOCAL_SOURCE
 
     @property
+    def release_date(self) -> date | None:
+        return self.album.release_date if self.album else None
+
+    @property
     def has_audio(self) -> bool:
         return self.audio_key is not None or self.remote_stream_url is not None
 
     @property
+    def is_preview(self) -> bool:
+        return self.license_code == "preview"
+
+    @property
     def playable(self) -> bool:
+        from app.core.config import get_settings
+
+        if self.is_preview and not get_settings().music_previews_visible:
+            return False  # a 30-second clip is not the song: hidden unless previews are switched on
         return self.availability == Availability.playable and self.stream_allowed and self.has_audio
 
     __table_args__ = (

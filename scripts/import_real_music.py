@@ -1,17 +1,18 @@
+# ruff: noqa: E402  (the backend root has to be on sys.path before the app imports)
 import sys
 from pathlib import Path
-import httpx
 
 # Ensure backend root is in sys.path
 backend_dir = Path(__file__).resolve().parents[1]
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from sqlalchemy import select, update
+from sqlalchemy import select
+
 from app.db.session import SessionLocal
-from app.music.providers.audius import AudiusProvider
+from app.models import Album
 from app.music.ingest import ingest
-from app.models import Album, Song
+from app.music.providers.audius import AudiusProvider
 
 GENRES_TO_FETCH = ["Pop", "Electronic", "Hip-Hop", "Lo-Fi", "Rock", "House", "Ambient"]
 
@@ -61,8 +62,8 @@ def main():
 
         print(f"   Ingest finished: {result.created} created, {result.updated} updated.")
 
-        # 4. Feature top albums and boost real song play counts so they appear on HomePage
-        print("-> Promoting imported real tracks to Home Page Featured & Trending...")
+        # 4. Feature a few albums with covers on the Home Page
+        print("-> Featuring imported albums on the Home Page...")
         
         # Mark up to 8 albums with covers as featured
         albums = db.scalars(
@@ -70,21 +71,13 @@ def main():
             .where(Album.source == "audius", Album.cover_url.is_not(None))
             .limit(8)
         ).all()
-        for idx, alb in enumerate(albums):
+        for alb in albums:
             alb.is_featured = True
         
-        # Give imported songs realistic play counts so they top Trending and Recommendations
-        audius_songs = db.scalars(
-            select(Song)
-            .where(Song.source == "audius")
-        ).all()
-        
-        for idx, s in enumerate(audius_songs):
-            s.play_count = 5000 - (idx * 50)  # Decreasing play counts for realistic rank
-        
+        # play_count is only ever raised by real listens here; the provider's own ordering is kept in
+        # provider_popularity by the Audius adapter, so nothing is invented.
         db.commit()
         print(f"   Featured {len(albums)} real albums.")
-        print(f"   Ranked {len(audius_songs)} real songs on Trending & Home Page.")
 
     print("\n" + "=" * 60)
     print("SUCCESS: Real music is now in your library and on the Home Page!")

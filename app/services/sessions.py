@@ -119,7 +119,7 @@ def end(db: Session, user: User, session_id: uuid.UUID) -> PlaybackSession:
     return session
 
 
-ControlAction = Literal["play", "pause", "seek", "play_song", "next", "queue_add", "queue_remove"]
+ControlAction = Literal["play", "pause", "seek", "play_song", "next", "prev", "queue_add", "queue_remove"]
 
 
 def apply_control(db: Session, user: User, session_id: uuid.UUID, action: str, *,
@@ -165,6 +165,8 @@ def apply_control(db: Session, user: User, session_id: uuid.UUID, action: str, *
                 session.queue, session.position_ms, session.is_playing = queue, 0, True
             else:
                 session.is_playing, session.position_ms = False, 0
+        case "prev":
+            session.position_ms = 0
         case "queue_add":
             if len(session.queue) >= MAX_QUEUE:
                 raise AppError("The queue is full", code="queue_full")

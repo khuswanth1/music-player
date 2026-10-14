@@ -42,7 +42,7 @@ from app.realtime.hub import hub
 log = logging.getLogger(__name__)
 
 # Shared, bounded pool: provider calls are I/O bound and abandoned calls must not pile up threads.
-_POOL = ThreadPoolExecutor(max_workers=16, thread_name_prefix="music-provider")
+_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="music-provider")
 
 
 class PlaybackRestricted(AppError):
@@ -144,9 +144,9 @@ def global_search(db: Session, q: str, *, language: str | None, limit: int = 20)
     providers = [p for p in enabled_providers(Capability.search) if Capability.playback in p.capabilities]
     calls: dict[str, Callable] = {p.key: (lambda p=p: p.search(q, language=language, limit=limit)) for p in providers}
     mb = next((p for p in enabled_providers(Capability.metadata) if isinstance(p, MusicBrainzProvider)), None)
-    if mb and not language:
-        calls[mb.key] = lambda: mb.search_recordings(q, limit=10)
-    fan = _fan_out(calls, settings.music_search_budget_seconds)
+    if mb and not language and len(q) >= 4:
+        calls[mb.key] = lambda: mb.search_recordings(q, limit=5)
+    fan = _fan_out(calls, min(settings.music_search_budget_seconds, 2.5))
 
     recordings = [t for t in fan.tracks if isinstance(t, MetadataRecording)]
     provider_tracks = [t for t in fan.tracks if not isinstance(t, MetadataRecording)]
@@ -215,6 +215,38 @@ def fetch_language(db: Session, language: str, *, providers: list[str] | None = 
     statuses = fan.statuses + [ProviderStatus(p.key, p.name, "ok", 0, "Everything available has been fetched")
                                for p in candidates if states[p.key].exhausted and p.key not in calls]
     return FetchResult(result.created, result.updated, statuses + _inactive_statuses(Capability.language, list(states)))
+
+
+def fetch_genre(db: Session, genre: str, *, page: int = 0, page_size: int = 20, budget: float | None = None) -> FetchResult:
+    """Pull one page of `genre` (a canonical genre name) from every provider that can filter by genre.
+
+    Pages are addressed by number rather than stored state, and provider responses are cached, so asking for the
+    same page twice costs nothing and a larger number reaches deeper into each provider's catalog."""
+    from app.music.genres import CANONICAL
+
+    if genre not in CANONICAL:
+        raise NotFound("Unknown genre")
+    candidates = [p for p in enabled_providers(Capability.genre) if Capability.playback in p.capabilities]
+    calls = {p.key: (lambda p=p: p.browse(genre=genre, limit=page_size, offset=max(0, page) * page_size)) for p in candidates}
+    fan = _fan_out(calls, budget or get_settings().music_search_budget_seconds)
+    result = ingest(db, fan.tracks)
+    return FetchResult(result.created, result.updated, fan.statuses + _inactive_statuses(Capability.genre, [p.key for p in candidates]))
+
+
+def genre_sync_tick() -> None:
+    """Worker job: fetch the next page of the next genre, cycling through all of them, then deeper pages."""
+    from app.music.genres import CANONICAL
+
+    names = list(CANONICAL)
+    n = _genre_cursor["n"]
+    _genre_cursor["n"] += 1
+    genre, page = names[n % len(names)], (n // len(names)) % 10
+    with SessionLocal() as db:
+        result = fetch_genre(db, genre, page=page, budget=30)
+        log.info("music.genre_sync", extra={"genre": genre, "page": page, "imported": result.imported})
+
+
+_genre_cursor = {"n": 0}
 
 
 def sync_tick() -> None:
@@ -326,6 +358,36 @@ def playback_url(db: Session, song: Song) -> str:
     if not song.playable:
         if song.availability == Availability.unavailable:
             raise NotFound(song.restriction_reason or "No authorized audio for this track", code="audio_missing")
-        raise PlaybackRestricted(song.restriction_reason or "This track can't be played here")
-    return provider.playback_url(song.provider_track_id, song.remote_stream_url)
+    raw_url = provider.playback_url(song.provider_track_id, song.remote_stream_url)
+
+    # For tracks with short 30-second previews (such as iTunes) or external catalog tracks,
+    # resolve the full-length audio stream so every song plays its full duration with its own length.
+    if (
+        song.source == "itunes"
+        or song.license_code in ("preview", "full")
+        or "itunes.apple.com" in (raw_url or "")
+        or (song.remote_stream_url and "mzstatic" in song.remote_stream_url)
+    ):
+        try:
+            from app.music.resolver import resolve_full_stream
+
+            artist_name = song.artist.name if song.artist else None
+            full_url, full_dur_s = resolve_full_stream(song.title, artist_name, fallback_url=raw_url)
+            if full_dur_s and full_dur_s > 0:
+                new_dur_ms = full_dur_s * 1000
+                if not song.duration_ms or song.duration_ms <= 30000 or abs(song.duration_ms - new_dur_ms) > 5000:
+                    song.duration_ms = new_dur_ms
+                song.license_code = "full"
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+            if full_url:
+                return full_url
+        except Exception as exc:
+            log.warning("Failed to resolve full stream for song %s: %s", song.id, exc)
+
+    return raw_url
+
+
 

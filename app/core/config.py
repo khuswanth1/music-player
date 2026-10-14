@@ -9,9 +9,7 @@ BACKEND_DIR = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore"
-    )
+    model_config = SettingsConfigDict(env_file=BACKEND_DIR / ".env", env_file_encoding="utf-8", extra="ignore")
 
     @classmethod
     def settings_customise_sources(
@@ -106,12 +104,23 @@ class Settings(BaseSettings):
     # Comma-separated provider keys to enable. Providers that need credentials stay inactive until configured.
     # `audius` is available but off by default: it is an open-upload platform (see docs/MUSIC_SOURCES.md).
     music_providers: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["jamendo", "internet_archive", "openverse", "ccmixter", "musicbrainz"])
+        default_factory=lambda: [
+            "itunes",
+            "jamendo",
+            "internet_archive",
+            "wikimedia_commons",
+            "openverse",
+            "ccmixter",
+            "musicbrainz",
+            "audius",
+        ]
+    )
     # Sent to every provider. MusicBrainz requires a meaningful User-Agent with contact details.
     music_user_agent: str = "Wavely/1.0 (+https://github.com/your-org/wavely)"
-    music_http_timeout_seconds: float = 8.0
+    music_http_timeout_seconds: float = 4.0
     # Total time budget for one federated search or language fetch across all providers.
-    music_search_budget_seconds: float = 10.0
+    music_search_budget_seconds: float = 3.0
+
     # How long provider API responses are cached in PostgreSQL.
     music_cache_ttl_minutes: int = 360
     # Re-verify a track's rights with its provider before playback when the last check is older than this.
@@ -121,10 +130,14 @@ class Settings(BaseSettings):
     commercial_deployment: bool = False
     # Offer "Download" links for tracks whose license AND provider terms both allow it.
     music_downloads_enabled: bool = True
+    # Some providers (iTunes) only supply a ~30-second preview of each song. By default those are hidden everywhere:
+    # lists, search, charts and playback only offer complete recordings. Set true to show previews, labelled Preview.
+    music_previews_visible: bool = False
     # Background sync: languages to keep warm (ISO codes), and how often (worker ticks) to fetch a page.
     catalog_sync_enabled: bool = False
-    catalog_sync_languages: Annotated[list[str], NoDecode] = Field(default_factory=lambda: [
-        "te", "hi", "ta", "kn", "ml", "bn", "pa", "en", "ko", "ja", "zh", "ar", "es", "fr", "pt", "de"])
+    catalog_sync_languages: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["te", "hi", "ta", "kn", "ml", "bn", "pa", "en", "ko", "ja", "zh", "ar", "es", "fr", "pt", "de"]
+    )
     catalog_sync_every_ticks: int = 10
     musicbrainz_enrichment_enabled: bool = True
     # Shared secret for signed rights notifications (takedowns, license changes) to /catalog/webhooks.
@@ -139,9 +152,29 @@ class Settings(BaseSettings):
     openverse_sources: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["wikimedia_audio"])
     ccmixter_daily_quota: int = 2000
     musicbrainz_daily_quota: int = 20000
+    wikimedia_daily_quota: int = 20000
+    itunes_daily_quota: int = 20000  # Apple documents roughly 20 calls/minute per IP
 
-    @field_validator("cors_origins", "trusted_hosts", "music_providers", "catalog_sync_languages",
-                     "openverse_sources", mode="before")
+    # --- Podcasts. iTunes podcast search + publisher RSS work with no key; the others need credentials. ---
+    podcast_index_key: str | None = None  # https://api.podcastindex.org (free)
+    podcast_index_secret: str | None = None
+    listen_notes_api_key: str | None = None  # optional; the free plan is quota-limited
+    podcast_index_daily_quota: int = 5000
+    listen_notes_daily_quota: int = 300
+    itunes_podcast_daily_quota: int = 10000
+    rss_daily_quota: int = 20000
+    rss_max_bytes: int = 5_000_000
+
+    @field_validator("database_url")
+    @classmethod
+    def _driver(cls, value: str) -> str:
+        # Hosting platforms hand out postgres:// or postgresql:// URLs; this app uses the psycopg 3 driver.
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value.removeprefix(prefix)
+        return value
+
+    @field_validator("cors_origins", "trusted_hosts", "music_providers", "catalog_sync_languages", "openverse_sources", mode="before")
     @classmethod
     def _split_csv(cls, value):
         if isinstance(value, str) and not value.strip().startswith("["):

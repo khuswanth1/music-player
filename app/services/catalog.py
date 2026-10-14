@@ -57,6 +57,8 @@ def song_outs(db: Session, user: User | None, songs: Sequence[Song]) -> list[Son
     for song in songs:
         item = SongOut.model_validate(song)
         item.liked = (song.id in liked) if user else None
+        if song.is_preview and not item.playable and item.restriction_reason is None:
+            item.restriction_reason = "Only a 30-second preview exists for this track"
         if item.playable and song.source not in active:
             item.playable, item.download_allowed = False, False
             item.restriction_reason = "This source is currently disabled on this server"

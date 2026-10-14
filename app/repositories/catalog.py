@@ -3,9 +3,10 @@ from collections.abc import Sequence
 from datetime import timedelta
 from typing import Literal
 
-from sqlalchemy import ColumnElement, Select, and_, func, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select, true
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.security import utcnow
 from app.models import (
     LOCAL_SOURCE,
@@ -31,11 +32,23 @@ def active_sources() -> list[str]:
     return [LOCAL_SOURCE, *(p.key for p in enabled_providers())]
 
 
+def song_country() -> ColumnElement:
+    """A song's country: where it was released when a provider says so, else its artist's country as MusicBrainz lists it."""
+    return func.coalesce(Song.country, select(Artist.country).where(Artist.id == Song.artist_id).correlate(Song).scalar_subquery())
+
+
+def complete_recordings() -> ColumnElement[bool]:
+    """Excludes 30-second provider previews unless MUSIC_PREVIEWS_VISIBLE is on."""
+    if get_settings().music_previews_visible:
+        return true()
+    return or_(Song.license_code.is_(None), Song.license_code != "preview")
+
+
 def playable_condition() -> ColumnElement[bool]:
     """Published, rights-cleared, streamable and from an active source: what lists, charts and
     recommendations may offer."""
     return and_(Song.is_published.is_(True), Song.availability == Availability.playable, Song.stream_allowed.is_(True),
-                Song.source.in_(active_sources()))
+                Song.source.in_(active_sources()), complete_recordings())
 
 
 def paginate(db: Session, stmt: Select, offset: int, limit: int) -> tuple[list, int]:

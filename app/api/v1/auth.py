@@ -25,12 +25,20 @@ from app.services.users import to_me
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-REFRESH_PATH = "/"
+REFRESH_PATH = "/api/v1/auth"  # the cookie is only ever sent to the auth endpoints
 OAUTH_NONCE_COOKIE = "wavely_oauth_nonce"
+
+
+def _drop_legacy_cookie(response: Response) -> None:
+    """Earlier builds scoped the refresh cookie to `/`. If one is still in the browser it would be sent next to the new
+    one and (last value wins) shadow it, so every response that touches the cookie also expires the old one."""
+    settings = get_settings()
+    response.delete_cookie(settings.refresh_cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="lax")
 
 
 def _set_refresh_cookie(response: Response, token: str) -> None:
     settings = get_settings()
+    _drop_legacy_cookie(response)
     response.set_cookie(
         settings.refresh_cookie_name, token, max_age=settings.refresh_token_ttl_days * 86400,
         httponly=True, secure=settings.cookie_secure, samesite="lax", path=REFRESH_PATH,
@@ -39,6 +47,7 @@ def _set_refresh_cookie(response: Response, token: str) -> None:
 
 def clear_refresh_cookie(response: Response) -> None:
     settings = get_settings()
+    _drop_legacy_cookie(response)
     response.delete_cookie(settings.refresh_cookie_name, path=REFRESH_PATH,
                            secure=settings.cookie_secure, httponly=True, samesite="lax")
 
@@ -101,11 +110,8 @@ def token(form: Annotated[OAuth2PasswordRequestForm, Depends()], request: Reques
 
 @router.post("/refresh", response_model=TokenResponse, dependencies=[Depends(rate_limit("refresh", 60, 60))])
 def refresh(request: Request, response: Response, db: DB):
-    raw = (
-        request.cookies.get(get_settings().refresh_cookie_name)
-        or request.headers.get("x-refresh-token")
-        or request.query_params.get("refresh_token")
-    )
+    # Cookie first; the header is for non-browser clients. Never a query parameter: URLs end up in logs and history.
+    raw = request.cookies.get(get_settings().refresh_cookie_name) or request.headers.get("x-refresh-token")
     try:
         session = auth_service.refresh(db, raw, ip=client_ip(request), user_agent=_ua(request))
     except AppError:
@@ -167,9 +173,9 @@ def google_callback(request: Request, db: DB, code: str | None = None, state: st
             ip=client_ip(request), user_agent=_ua(request))
     except AppError as exc:
         return RedirectResponse(f"{target}?error={exc.code}", status_code=302)
-    # The SPA receives tokens in URL for cross-port dev resilience, plus httpOnly cookie
-    callback_url = f"{target}?token={session.access_token}&refresh_token={session.refresh_token}"
-    response = RedirectResponse(callback_url, status_code=302)
+    # No tokens in the URL (history, referrers and logs would keep them): the httpOnly cookie is set here and the SPA
+    # trades it for an access token with POST /auth/refresh.
+    response = RedirectResponse(target, status_code=302)
     _set_refresh_cookie(response, session.refresh_token)
     response.delete_cookie(OAUTH_NONCE_COOKIE, path=f"{REFRESH_PATH}/google")
     return response

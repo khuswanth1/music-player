@@ -42,7 +42,7 @@ def song_by_pid(pid: str) -> Song:
 
 
 def search(client, headers, q, **params):
-    res = client.get("/api/v1/search/global", params={"q": q, **params}, headers=headers)
+    res = client.get("/api/v1/search/global", params={"q": q, "categories": "songs", **params}, headers=headers)
     assert res.status_code == 200, res.text
     return res.json()
 

@@ -1,3 +1,4 @@
+import SpotifyCard from '../components/SpotifyCard'
 import { useEffect, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { Check, Crown, FlaskConical } from 'lucide-react'
@@ -161,6 +162,7 @@ export function AccountPage() {
         </form>
       </Card>
       <SubscriptionCard />
+      <SpotifyCard />
       <Card title={user.has_password ? 'Change password' : 'Set a password'}>
         <form onSubmit={changePassword} className="space-y-4">
           {user.has_password && <Field label="Current password"><input type="password" required autoComplete="current-password" className={inputClass} value={pw.current_password} onChange={(e) => setPw({ ...pw, current_password: e.target.value })} /></Field>}

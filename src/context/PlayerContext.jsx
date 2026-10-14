@@ -1,14 +1,15 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { getAccessToken } from '../api/client'
-import { catalogApi, libraryApi } from '../api/endpoints'
-import { songCover } from '../lib/tracks'
+import { catalogApi, libraryApi, podcastApi } from '../api/endpoints'
+import { isEpisode, isUnavailable, songCover } from '../lib/tracks'
 import { useAuth } from './AuthContext'
 import { initialPlayerState, playerReducer } from './playerReducer'
 import { useChannel } from './RealtimeContext'
+import { useSpotify } from './SpotifyContext'
 import { useToast } from './ToastContext'
 
 const PlayerContext = createContext(null)
-const STORAGE_KEY = 'wavely.player.v1'
+const STORAGE_KEY = 'wavely.player.v2' // v1 snapshots may hold tracks that are no longer offered (30-second previews)
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // Errors after which we move on to the next song instead of stopping.
 const SKIPPABLE = new Set(['premium_required', 'playback_restricted', 'source_disabled', 'audio_missing'])
@@ -31,12 +32,19 @@ export function PlayerProvider({ children }) {
   const [buffering, setBuffering] = useState(false)
   const [session, setSession] = useState(null) // { id, name, isHost, controls }
 
+  const spotify = useSpotify()
+  const spotifyRef = useRef(spotify)
+  spotifyRef.current = spotify
+  const engineRef = useRef('audio') // 'audio' (our <audio>) or 'spotify' (the listener's own Spotify Premium device)
+  const isPlayingRef = useRef(false)
+  isPlayingRef.current = isPlaying
   const audioRef = useRef(null)
   const urlCache = useRef(new Map()) // songId -> { url, expiresAt }
   const wantPlayRef = useRef(false)
   const pendingSeekRef = useRef(null)
   const listenRef = useRef({ songId: null, ms: 0, lastTime: null, context: null })
   const restoredRef = useRef(false)
+  const episodeRef = useRef({ item: null, positionMs: 0, reportedAt: 0 }) // podcast episode being listened to
   const retriedRef = useRef(null) // song id whose stream already got one fresh-URL retry
   const stateRef = useRef(state)
   stateRef.current = state
@@ -63,6 +71,15 @@ export function PlayerProvider({ children }) {
     listenRef.current = { songId: null, ms: 0, lastTime: null, context: null }
   }, [])
 
+  // --- podcast resume position + listening history -----------------------------------
+  const flushEpisode = useCallback((completed = false) => {
+    const e = episodeRef.current
+    if (e.item && getAccessToken() && (e.positionMs >= 3000 || completed)) {
+      podcastApi.progress(e.item, completed ? (e.item.duration_s || e.positionMs / 1000) : e.positionMs / 1000, completed).catch(() => {})
+    }
+    episodeRef.current = { ...e, reportedAt: Date.now() }
+  }, [])
+
   // --- stream URLs (short-lived, song-scoped tokens) ---------------------------------
   const streamUrlFor = useCallback(async (songId, force = false) => {
     const cached = urlCache.current.get(songId)
@@ -79,29 +96,70 @@ export function PlayerProvider({ children }) {
     if (!audio || !currentId) return undefined
     let cancelled = false
     flushListen(false)
+    flushEpisode(false)
     retriedRef.current = null
-    listenRef.current = { songId: currentId, ms: 0, lastTime: null, context: stateRef.current.context }
+    const episode = isEpisode(current)
+    if (!episode && isUnavailable(current)) { // e.g. restored from an old queue: don't even ask the server, just move on
+      setBuffering(false)
+      if (stateRef.current.index + 1 < stateRef.current.queue.length) dispatch({ type: 'next' })
+      else wantPlayRef.current = false
+      return undefined
+    }
+    // Episodes aren't catalog songs: no stream-url call, no song listening history, and they resume where you left off.
+    listenRef.current = { songId: episode ? null : currentId, ms: 0, lastTime: null, context: stateRef.current.context }
+    episodeRef.current = { item: episode ? current : null, positionMs: 0, reportedAt: Date.now() }
+    if (episode && pendingSeekRef.current == null && current.resume_ms > 5000 && current.resume_ms < (current.duration_ms || Infinity) - 10_000) {
+      pendingSeekRef.current = current.resume_ms
+    }
     setPosition(pendingSeekRef.current ?? 0)
     setDuration(current?.duration_ms || 0)
     setBuffering(true)
-    streamUrlFor(currentId)
-      .then((url) => {
+    // A track that is only a short preview here can play in full through the listener's own Spotify Premium account.
+    const trySpotify = !episode && current.access === 'preview' && spotifyRef.current.ready && wantPlayRef.current
+    if (engineRef.current === 'spotify') spotifyRef.current.pause?.()
+    engineRef.current = 'audio'
+    const startAudio = (url) => {
+      audio.src = url
+      if (pendingSeekRef.current != null) {
+        const seekTo = pendingSeekRef.current / 1000
+        audio.addEventListener('loadedmetadata', () => { audio.currentTime = seekTo }, { once: true })
+        pendingSeekRef.current = null
+      }
+      if (wantPlayRef.current) {
+        audio.play().catch(() => setIsPlaying(false)) // autoplay may be blocked until the user interacts
+      }
+    }
+    const source = trySpotify
+      ? spotifyRef.current.resolve(current).then((uri) => (uri ? { uri } : streamUrlFor(currentId).then((url) => ({ url }))))
+      : (episode
+        ? (current.audio_url ? Promise.resolve(current.audio_url) : Promise.reject(Object.assign(new Error('This episode has no playable audio'), { code: 'audio_missing' })))
+        : streamUrlFor(currentId)).then((url) => ({ url }))
+    source
+      .then(async ({ url, uri }) => {
         if (cancelled) return
-        audio.src = url
-        if (pendingSeekRef.current != null) {
-          const seekTo = pendingSeekRef.current / 1000
-          audio.addEventListener('loadedmetadata', () => { audio.currentTime = seekTo }, { once: true })
-          pendingSeekRef.current = null
+        if (uri) {
+          audio.pause()
+          engineRef.current = 'spotify'
+          try {
+            await spotifyRef.current.play(uri, pendingSeekRef.current ?? 0)
+            pendingSeekRef.current = null
+            return
+          } catch {
+            engineRef.current = 'audio'
+            toast.info("Spotify couldn't play this track; playing the preview instead")
+            startAudio(await streamUrlFor(currentId))
+            return
+          }
         }
-        if (wantPlayRef.current) {
-          audio.play().catch(() => setIsPlaying(false)) // autoplay may be blocked until the user interacts
-        }
+        startAudio(url)
       })
       .catch((err) => {
         if (cancelled) return
         setBuffering(false)
-        toast.apiError(err, "Couldn't play this song")
-        if (SKIPPABLE.has(err.code) || err.status === 404 || err.status === 451) {
+        const skippable = SKIPPABLE.has(err.code) || err.status === 404 || err.status === 451
+        if (skippable) toast.info("Skipped a track that isn't available here")
+        else toast.apiError(err, "Couldn't play this song")
+        if (skippable) {
           // skip to the next playable song
           if (stateRef.current.index + 1 < stateRef.current.queue.length) dispatch({ type: 'next' })
           else wantPlayRef.current = false
@@ -128,6 +186,11 @@ export function PlayerProvider({ children }) {
     const onTime = () => {
       const t = audio.currentTime
       setPosition(t * 1000)
+      const ep = episodeRef.current
+      if (ep.item) {
+        ep.positionMs = t * 1000
+        if (!audio.paused && Date.now() - ep.reportedAt > 15_000) flushEpisode(false)
+      }
       const l = listenRef.current
       if (!audio.paused && l.lastTime != null) {
         const delta = t - l.lastTime
@@ -136,12 +199,24 @@ export function PlayerProvider({ children }) {
       l.lastTime = t
     }
     const onPlay = () => { setIsPlaying(true); listenRef.current.lastTime = audio.currentTime }
-    const onPause = () => setIsPlaying(false)
+    const onPause = () => { setIsPlaying(false); if (episodeRef.current.item) flushEpisode(false) }
     const onWaiting = () => setBuffering(true)
     const onPlaying = () => setBuffering(false)
-    const onMeta = () => { setDuration(audio.duration * 1000); setBuffering(false) }
+    const onMeta = () => {
+      if (Number.isFinite(audio.duration) && audio.duration > 0) {
+        if (audio.duration <= 35 && (current?.duration_ms || 0) > 35000) {
+          setDuration(current.duration_ms)
+        } else {
+          setDuration(audio.duration * 1000)
+        }
+      } else if (current?.duration_ms) {
+        setDuration(current.duration_ms)
+      }
+      setBuffering(false)
+    }
     const onEnded = () => {
       flushListen(true)
+      if (episodeRef.current.item) flushEpisode(true)
       if (sessionRef.current) {
         if (sessionRef.current.isHost) sessionRef.current.controls.next()
         return
@@ -149,6 +224,12 @@ export function PlayerProvider({ children }) {
       dispatch({ type: 'next', auto: true })
     }
     const onError = async () => {
+      if (episodeRef.current.item) {
+        // Publisher-hosted audio has no fresh-URL fallback: report it and move on.
+        setBuffering(false)
+        toast.error("This episode couldn't be played. The publisher's audio may be unavailable.")
+        return
+      }
       const songId = listenRef.current.songId
       if (!audio.src || !songId) return
       if (retriedRef.current === songId) {
@@ -176,11 +257,33 @@ export function PlayerProvider({ children }) {
     return () => {
       for (const [e, fn] of Object.entries(events)) audio.removeEventListener(e, fn)
     }
-  }, [flushListen, streamUrlFor, toast])
+  }, [flushListen, flushEpisode, streamUrlFor, toast])
 
   useEffect(() => {
     if (audioRef.current) audioRef.current.volume = state.muted ? 0 : state.volume
+    spotifyRef.current.setVolume?.(state.muted ? 0 : state.volume)
   }, [state.volume, state.muted])
+
+  // Spotify engine: mirror the SDK's state (it pushes changes, not progress, so poll while playing).
+  const lastSpotify = useRef({ playing: false })
+  useEffect(() => {
+    spotifyRef.current.onState?.((s) => {
+      if (engineRef.current !== 'spotify' || !s) return
+      const wasPlaying = lastSpotify.current.playing
+      lastSpotify.current = { playing: !s.paused }
+      setIsPlaying(!s.paused)
+      setPosition(s.position)
+      setDuration(s.duration)
+      setBuffering(Boolean(s.loading))
+      // The SDK signals the end of a track as: paused, back at 0, with the track in `previous_tracks`.
+      if (wasPlaying && s.paused && s.position === 0 && s.track_window?.previous_tracks?.length) dispatch({ type: 'next', auto: true })
+    })
+  }, [spotify.ready])
+  useEffect(() => {
+    if (!isPlaying || engineRef.current !== 'spotify') return undefined
+    const t = setInterval(() => spotifyRef.current.getState?.().then((s) => s && engineRef.current === 'spotify' && setPosition(s.position)), 500)
+    return () => clearInterval(t)
+  }, [isPlaying])
 
   // --- controls ------------------------------------------------------------------------
   const memberBlocked = useCallback(() => {
@@ -194,8 +297,15 @@ export function PlayerProvider({ children }) {
 
   const playList = useCallback((songs, startIndex = 0, context = null) => {
     if (memberBlocked()) return
-    const playable = songs.filter(Boolean)
-    if (!playable.length) return
+    // Only tracks that can actually be played go into the queue; the start moves to the first playable one at or after it.
+    const wanted = songs[startIndex]
+    const playable = songs.filter((s) => s && !isUnavailable(s))
+    if (!playable.length) {
+      toast.info("None of these tracks can be played here")
+      return
+    }
+    const after = songs.slice(startIndex).find((s) => s && !isUnavailable(s))
+    startIndex = Math.max(0, playable.findIndex((s) => s.id === (after || wanted)?.id))
     if (sessionRef.current?.isHost) {
       sessionRef.current.controls.playSong(playable[startIndex])
       return
@@ -207,12 +317,13 @@ export function PlayerProvider({ children }) {
       audioRef.current.currentTime = 0
       audioRef.current.play().catch(() => {})
     }
-  }, [memberBlocked])
+  }, [memberBlocked, toast])
 
   const play = useCallback(() => {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.play()
     wantPlayRef.current = true
+    if (engineRef.current === 'spotify') return spotifyRef.current.resume()
     audioRef.current?.play().catch(() => {})
   }, [memberBlocked])
 
@@ -220,19 +331,22 @@ export function PlayerProvider({ children }) {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.pause()
     wantPlayRef.current = false
+    if (engineRef.current === 'spotify') return spotifyRef.current.pause()
     audioRef.current?.pause()
   }, [memberBlocked])
 
   const toggle = useCallback(() => {
     if (!stateRef.current.queue.length && !sessionRef.current) return
-    if (audioRef.current?.paused) play()
+    const paused = engineRef.current === 'spotify' ? !isPlayingRef.current : audioRef.current?.paused
+    if (paused) play()
     else pause()
   }, [play, pause])
 
   const seek = useCallback((ms) => {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.seek(ms)
-    if (audioRef.current) audioRef.current.currentTime = ms / 1000
+    if (engineRef.current === 'spotify') spotifyRef.current.seek(ms)
+    else if (audioRef.current) audioRef.current.currentTime = ms / 1000
     setPosition(ms)
   }, [memberBlocked])
 
@@ -246,7 +360,18 @@ export function PlayerProvider({ children }) {
 
   const prev = useCallback(() => {
     if (memberBlocked()) return
-    if ((audioRef.current?.currentTime || 0) > 3 || stateRef.current.index === 0) {
+    if (sessionRef.current?.isHost) return sessionRef.current.controls.prev?.()
+    const seconds = engineRef.current === 'spotify' ? positionRef.current / 1000 : (audioRef.current?.currentTime || 0)
+    if (seconds > 3) {
+      seek(0)
+      return
+    }
+    if (stateRef.current.index === 0) {
+      if (stateRef.current.repeat === 'all' && stateRef.current.queue.length > 1) {
+        wantPlayRef.current = true
+        dispatch({ type: 'prev' })
+        return
+      }
       seek(0)
       return
     }
@@ -301,9 +426,13 @@ export function PlayerProvider({ children }) {
         dispatch({ type: 'restore', state: { queue: local.queue, index: local.index, shuffle: local.shuffle,
           repeat: local.repeat, volume: local.volume ?? 0.8, context: local.context } })
       } else if (server.current_song) {
-        pendingSeekRef.current = server.position_ms
-        dispatch({ type: 'restore', state: { queue: [server.current_song, ...server.queue], index: 0,
-          shuffle: server.shuffle, repeat: server.repeat_mode, volume: server.volume, context: server.context } })
+        // Skip anything that can't be played any more (e.g. a 30-second preview that is now hidden).
+        const queue = [server.current_song, ...server.queue].filter((s) => s && !isUnavailable(s))
+        if (queue.length) {
+          pendingSeekRef.current = queue[0].id === server.current_song.id ? server.position_ms : null
+          dispatch({ type: 'restore', state: { queue, index: 0,
+            shuffle: server.shuffle, repeat: server.repeat_mode, volume: server.volume, context: server.context } })
+        }
       }
     }).catch(() => {})
   }, [authStatus, user?.id])
@@ -330,10 +459,10 @@ export function PlayerProvider({ children }) {
     } catch {
       /* storage full or disabled */
     }
-    if (toServer) {
+    if (toServer && !isEpisode(s.queue[s.index])) { // episodes resume through their own progress endpoint
       libraryApi.savePlayer({
         current_song_id: s.queue[s.index]?.id || null, position_ms: snapshot.position,
-        queue: s.queue.slice(s.index + 1, s.index + 201).map((x) => x.id), context: s.context,
+        queue: s.queue.slice(s.index + 1, s.index + 201).filter((x) => !isEpisode(x)).map((x) => x.id), context: s.context,
         shuffle: s.shuffle, repeat_mode: s.repeat, volume: s.volume,
       }).catch(() => {})
     }

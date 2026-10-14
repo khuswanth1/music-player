@@ -52,7 +52,7 @@ export default function AppLayout() {
         <Sidebar />
         <main id="main" ref={mainRef}
           onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 10)}
-          className="relative min-w-0 flex-1 overflow-y-auto bg-gradient-to-b from-elevated to-canvas md:my-2 md:mr-2 md:rounded-lg">
+          className="relative min-w-0 flex-1 overflow-y-auto bg-gradient-to-b from-[#2b2b2b] via-surface to-surface bg-[length:100%_320px] bg-no-repeat bg-surface md:my-2 md:mr-2 md:rounded-lg">
           <TopBar scrolled={scrolled} />
           <div className="pb-10">
             <Outlet />

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, Navigate, useNavigate, useSearchParams } from 'react-router'
-import { authApi, meApi } from '../api/endpoints'
-import { setAccessToken } from '../api/client'
+import { authApi } from '../api/endpoints'
 import {
   AuthLabel, AuthShell, BackButton, Banner, CodeInput, FieldError, PasswordChecklist, PasswordInput, PrimaryButton,
   SocialButtons, StepHeader, authInput,
@@ -474,7 +473,7 @@ const OAUTH_ERRORS = {
 
 /** Google OAuth lands here. Success goes straight to the app; any failure returns to the login page. */
 export function AuthCallbackPage() {
-  const { resume, acceptSession } = useAuth()
+  const { resume } = useAuth()
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const error = params.get('error')
@@ -483,28 +482,10 @@ export function AuthCallbackPage() {
       navigate(`/login?${new URLSearchParams({ oauth_error: error })}`, { replace: true })
       return
     }
-    const token = params.get('token')
-    const refreshToken = params.get('refresh_token')
-    if (refreshToken && typeof localStorage !== 'undefined') {
-      localStorage.setItem('wavely_refresh', refreshToken)
-    }
-    if (token) {
-      setAccessToken(token)
-      meApi.get()
-        .then((user) => {
-          acceptSession({ access_token: token, user })
-          navigate('/', { replace: true })
-        })
-        .catch(() => {
-          resume()
-            .then(() => navigate('/', { replace: true }))
-            .catch(() => navigate(`/login?${new URLSearchParams({ oauth_error: 'oauth_failed' })}`, { replace: true }))
-        })
-      return
-    }
+    // The backend set the httpOnly refresh cookie before redirecting here; trade it for an access token.
     resume()
       .then(() => navigate('/', { replace: true }))
       .catch(() => navigate(`/login?${new URLSearchParams({ oauth_error: 'oauth_failed' })}`, { replace: true }))
-  }, [error, resume, acceptSession, navigate, params])
+  }, [error, resume, navigate])
   return <div className="flex h-dvh items-center justify-center bg-canvas"><Spinner className="size-8 text-accent" /></div>
 }

@@ -46,9 +46,9 @@ async function parseError(res) {
 /** One refresh at a time: concurrent 401s all wait on the same request. */
 export function refreshSession() {
   if (!refreshInFlight) {
-    const stored = typeof localStorage !== 'undefined' ? localStorage.getItem('wavely_refresh') : null;
-    const headers = stored ? { 'X-Refresh-Token': stored } : {};
-    refreshInFlight = fetch(`${API_BASE}/auth/refresh`, { method: 'POST', headers, credentials: 'include' })
+    // The refresh token lives only in an httpOnly cookie, so page scripts (and any XSS) can never read it.
+    try { localStorage.removeItem('wavely_refresh') } catch { /* an older build kept it here */ }
+    refreshInFlight = fetch(`${API_BASE}/auth/refresh`, { method: 'POST', credentials: 'include' })
       .then(async (res) => {
         if (!res.ok) throw await parseError(res)
         const data = await res.json()

@@ -1,26 +1,51 @@
+import { Suspense, lazy } from 'react'
 import { BrowserRouter, Link, Route, Routes } from 'react-router'
 import AppLayout, { RequireAuth } from './components/layout/AppLayout'
-import { EmptyState } from './components/ui'
+import { EmptyState, Spinner } from './components/ui'
 import { AuthProvider } from './context/AuthContext'
 import { LibraryProvider } from './context/LibraryContext'
 import { PlayerProvider } from './context/PlayerContext'
 import { RealtimeProvider } from './context/RealtimeContext'
 import { SessionProvider } from './context/SessionContext'
+import { SpotifyProvider } from './context/SpotifyContext'
 import { ToastProvider } from './context/ToastContext'
-import { AccountPage, DevCheckoutPage, PremiumPage } from './pages/AccountPages'
 import { AuthCallbackPage, ForgotPasswordPage, LoginPage, RegisterPage, ResetPasswordPage } from './pages/AuthPages'
 import { AlbumPage, ArtistPage, GenrePage } from './pages/CatalogPages'
-import { ChartPage, ChartsPage, SourcesPage } from './pages/ChartsPages'
 import HomePage from './pages/HomePage'
-import { LanguagePage, LanguagesPage } from './pages/LanguagePages'
 import PlaylistPage, { HistoryPage, JoinPlaylistPage, LibraryPage, LikedSongsPage } from './pages/PlaylistPage'
 import SearchPage from './pages/SearchPage'
-import SessionsPage from './pages/SessionsPage'
+import SpotifyCallbackPage from './pages/SpotifyCallbackPage'
 import AdminLayout, { RequirePermission } from './pages/admin/AdminLayout'
-import CatalogAdmin from './pages/admin/CatalogAdmin'
-import DashboardPage from './pages/admin/DashboardPage'
-import { BillingAdmin, PlaylistsAdmin, UsersAdmin, WebhooksAdmin } from './pages/admin/ManagementPages'
-import SourcesAdmin from './pages/admin/SourcesAdmin'
+
+// Rarely-visited pages load on demand so the first screen ships less JavaScript.
+const named = (loader, name) => lazy(() => loader().then((m) => ({ default: m[name] })))
+const AccountPage = named(() => import('./pages/AccountPages'), 'AccountPage')
+const DevCheckoutPage = named(() => import('./pages/AccountPages'), 'DevCheckoutPage')
+const PremiumPage = named(() => import('./pages/AccountPages'), 'PremiumPage')
+const ChartPage = named(() => import('./pages/ChartsPages'), 'ChartPage')
+const ChartsPage = named(() => import('./pages/ChartsPages'), 'ChartsPage')
+const SourcesPage = named(() => import('./pages/ChartsPages'), 'SourcesPage')
+const ArtistsPage = lazy(() => import('./pages/ArtistsPage'))
+const MoviesPage = named(() => import('./pages/MoviePages'), 'MoviesPage')
+const SoundtrackPage = named(() => import('./pages/MoviePages'), 'SoundtrackPage')
+const PodcastPage = named(() => import('./pages/PodcastPages'), 'PodcastPage')
+const PodcastsPage = named(() => import('./pages/PodcastPages'), 'PodcastsPage')
+const PrivateAlbumPage = named(() => import('./pages/PrivateAlbumPages'), 'PrivateAlbumPage')
+const PrivateAlbumsPage = named(() => import('./pages/PrivateAlbumPages'), 'PrivateAlbumsPage')
+const SharedAlbumPage = named(() => import('./pages/PrivateAlbumPages'), 'SharedAlbumPage')
+const LanguagePage = named(() => import('./pages/LanguagePages'), 'LanguagePage')
+const LanguagesPage = named(() => import('./pages/LanguagePages'), 'LanguagesPage')
+const AlbumsPage = named(() => import('./pages/WorldPages'), 'AlbumsPage')
+const CountriesPage = named(() => import('./pages/WorldPages'), 'CountriesPage')
+const CountryPage = named(() => import('./pages/WorldPages'), 'CountryPage')
+const SessionsPage = lazy(() => import('./pages/SessionsPage'))
+const CatalogAdmin = lazy(() => import('./pages/admin/CatalogAdmin'))
+const DashboardPage = lazy(() => import('./pages/admin/DashboardPage'))
+const BillingAdmin = named(() => import('./pages/admin/ManagementPages'), 'BillingAdmin')
+const PlaylistsAdmin = named(() => import('./pages/admin/ManagementPages'), 'PlaylistsAdmin')
+const UsersAdmin = named(() => import('./pages/admin/ManagementPages'), 'UsersAdmin')
+const WebhooksAdmin = named(() => import('./pages/admin/ManagementPages'), 'WebhooksAdmin')
+const SourcesAdmin = lazy(() => import('./pages/admin/SourcesAdmin'))
 
 function NotFound() {
   return (
@@ -39,8 +64,10 @@ export default function App() {
         <AuthProvider>
           <RealtimeProvider>
             <LibraryProvider>
+              <SpotifyProvider>
               <PlayerProvider>
                 <SessionProvider>
+                  <Suspense fallback={<div className="flex h-dvh items-center justify-center"><Spinner className="size-8 text-accent" /></div>}>
                   <Routes>
                     <Route path="/login" element={<LoginPage />} />
                     <Route path="/register" element={<RegisterPage />} />
@@ -55,6 +82,17 @@ export default function App() {
                       <Route path="history" element={<HistoryPage />} />
                       <Route path="album/:id" element={<AlbumPage />} />
                       <Route path="artist/:id" element={<ArtistPage />} />
+                      <Route path="artists" element={<ArtistsPage />} />
+                      <Route path="albums" element={<AlbumsPage />} />
+                      <Route path="countries" element={<CountriesPage />} />
+                      <Route path="country/:code" element={<CountryPage />} />
+                      <Route path="podcasts" element={<PodcastsPage />} />
+                      <Route path="podcast/:id" element={<PodcastPage />} />
+                      <Route path="movies" element={<MoviesPage />} />
+                      <Route path="soundtrack/:id" element={<SoundtrackPage />} />
+                      <Route path="private-albums" element={<PrivateAlbumsPage />} />
+                      <Route path="private-albums/:id" element={<PrivateAlbumPage />} />
+                      <Route path="shared/:code" element={<SharedAlbumPage />} />
                       <Route path="genre/:slug" element={<GenrePage />} />
                       <Route path="languages" element={<LanguagesPage />} />
                       <Route path="language/:code" element={<LanguagePage />} />
@@ -65,6 +103,7 @@ export default function App() {
                       <Route path="playlist/:id/join" element={<JoinPlaylistPage />} />
                       <Route path="sessions" element={<SessionsPage />} />
                       <Route path="account" element={<AccountPage />} />
+                      <Route path="spotify/callback" element={<SpotifyCallbackPage />} />
                       <Route path="premium" element={<PremiumPage />} />
                       <Route path="checkout/dev" element={<DevCheckoutPage />} />
                       <Route path="admin" element={<AdminLayout />}>
@@ -79,8 +118,10 @@ export default function App() {
                       <Route path="*" element={<NotFound />} />
                     </Route>
                   </Routes>
+                  </Suspense>
                 </SessionProvider>
               </PlayerProvider>
+              </SpotifyProvider>
             </LibraryProvider>
           </RealtimeProvider>
         </AuthProvider>

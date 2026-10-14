@@ -60,6 +60,9 @@ export function playerReducer(state, action) {
       return { ...state, ended: (state.ended || 0) + 1 }
     }
     case 'prev':
+      if (state.index === 0 && state.repeat === 'all' && state.queue.length > 1) {
+        return { ...state, index: state.queue.length - 1, queuedAhead: 0 }
+      }
       return { ...state, index: Math.max(0, state.index - 1), queuedAhead: 0 }
     case 'toggleShuffle': {
       if (!state.queue.length) return { ...state, shuffle: !state.shuffle }
@@ -78,8 +81,16 @@ export function playerReducer(state, action) {
       return { ...state, volume: Math.min(1, Math.max(0, action.value)), muted: false }
     case 'toggleMute':
       return { ...state, muted: !state.muted }
-    case 'restore':
-      return { ...state, ...action.state }
+    case 'restore': {
+      // A saved queue can hold tracks that have since become unplayable; never put those back.
+      const next = { ...state, ...action.state }
+      if (!next.queue?.length) return next
+      const current = next.queue[next.index]
+      const queue = next.queue.filter((s) => s && s.playable !== false && s.has_audio !== false && s.is_published !== false)
+      if (!queue.length) return { ...next, queue: [], index: -1, original: null, queuedAhead: 0 }
+      const at = current ? queue.findIndex((s) => s.id === current.id) : -1
+      return { ...next, queue, index: at >= 0 ? at : 0, original: null }
+    }
     default:
       return state
   }

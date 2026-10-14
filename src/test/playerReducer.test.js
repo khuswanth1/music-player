@@ -37,6 +37,21 @@ describe('playerReducer', () => {
     expect(current(playerReducer(s, { type: 'next' }))).toBe('b')
   })
 
+  it('navigates to previous track and wraps around when repeat all is active', () => {
+    let s = playerReducer(initialPlayerState, { type: 'load', songs, startIndex: 2 })
+    s = playerReducer(s, { type: 'prev' })
+    expect(current(s)).toBe('b')
+    s = playerReducer(s, { type: 'prev' })
+    expect(current(s)).toBe('a')
+    // at index 0 with repeat off, stays at 0
+    s = playerReducer(s, { type: 'prev' })
+    expect(current(s)).toBe('a')
+    // with repeat all, wraps around to the last track
+    s = playerReducer(s, { type: 'cycleRepeat' }) // all
+    s = playerReducer(s, { type: 'prev' })
+    expect(current(s)).toBe('d')
+  })
+
   it('"Add to queue" keeps added songs in the order they were added, right after the current one', () => {
     let s = playerReducer(initialPlayerState, { type: 'load', songs, startIndex: 0 })
     s = playerReducer(s, { type: 'enqueue', song: song('x') })
@@ -84,5 +99,24 @@ describe('playerReducer', () => {
   it('shuffled() is a permutation', () => {
     const out = shuffled([1, 2, 3, 4, 5])
     expect(out.sort()).toEqual([1, 2, 3, 4, 5])
+  })
+})
+
+describe('restoring a saved queue', () => {
+  const song = (id, extra = {}) => ({ id, title: id, playable: true, has_audio: true, is_published: true, ...extra })
+
+  it('drops tracks that can no longer be played and keeps the current one in place', () => {
+    const queue = [song('a', { playable: false }), song('b'), song('c', { has_audio: false }), song('d')]
+    const state = playerReducer(initialPlayerState, { type: 'restore', state: { queue, index: 3 } })
+    expect(state.queue.map((s) => s.id)).toEqual(['b', 'd'])
+    expect(state.queue[state.index].id).toBe('d')
+  })
+
+  it('starts at the first playable track when the saved current one is gone, and empties if nothing is playable', () => {
+    const q = [song('a', { playable: false }), song('b')]
+    expect(playerReducer(initialPlayerState, { type: 'restore', state: { queue: q, index: 0 } }).queue[0].id).toBe('b')
+    const none = playerReducer(initialPlayerState, { type: 'restore', state: { queue: [song('x', { playable: false })], index: 0 } })
+    expect(none.queue).toEqual([])
+    expect(none.index).toBe(-1)
   })
 })

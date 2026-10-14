@@ -167,6 +167,7 @@ export function Field({ label, error, children, hint }) {
   )
 }
 
+export const selectClass = 'w-auto rounded-md border border-line bg-surface px-3 py-2 text-sm text-white focus:border-white focus:outline-none'
 export const inputClass = 'w-full rounded-md border border-line bg-surface px-3 py-2.5 text-sm text-white placeholder:text-subtle focus:border-white focus:outline-none'
 
 export function SectionHeader({ title, to, linkLabel = 'Show all', LinkComponent }) {

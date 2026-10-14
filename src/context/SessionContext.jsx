@@ -71,6 +71,7 @@ export function SessionProvider({ children }) {
         pause: () => control('pause'),
         seek: (ms) => control('seek', { position_ms: Math.round(ms) }),
         next: () => control('next'),
+        prev: () => control('prev'),
         playSong: (song) => control('play_song', { song_id: song.id }),
         queueAdd: (song) => {
           control('queue_add', { song_id: song.id })

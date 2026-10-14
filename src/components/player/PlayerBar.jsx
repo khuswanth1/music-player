@@ -4,8 +4,8 @@ import { ListMusic, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward
 import { usePlayer } from '../../context/PlayerContext'
 import { formatDuration } from '../../lib/format'
 import { LikeButton } from '../TrackList'
-import { licenseShort, songCover } from '../../lib/tracks'
-import { CreditsModal } from '../TrackMeta'
+import { isEpisode, licenseShort, songCover } from '../../lib/tracks'
+import { AccessBadge, CreditsModal } from '../TrackMeta'
 import { Cover, Spinner } from '../ui'
 
 function Slider({ value, max, onChange, onCommit, label, className = '', disabled = false }) {
@@ -24,7 +24,8 @@ export default function PlayerBar({ onToggleQueue, queueOpen }) {
   const [scrub, setScrub] = useState(null)
   const [credits, setCredits] = useState(false)
   const song = p.current
-  const external = song && song.source && song.source !== 'local'
+  const episode = isEpisode(song)
+  const external = song && !episode && song.source && song.source !== 'local'
   const shownPos = scrub ?? p.position
   const memberLocked = p.session && !p.session.isHost
   const VolumeIcon = p.muted || p.volume === 0 ? VolumeX : p.volume < 0.5 ? Volume1 : Volume2
@@ -42,16 +43,28 @@ export default function PlayerBar({ onToggleQueue, queueOpen }) {
             <>
               <Cover src={songCover(song)} seed={song.album?.id || song.id} alt="" className="size-12 shrink-0 md:size-14" />
               <div className="min-w-0">
-                <Link to={song.album ? `/album/${song.album.id}` : `/artist/${song.artist.id}`} className="block truncate text-sm font-semibold hover:underline">{song.title}</Link>
-                <Link to={`/artist/${song.artist.id}`} className="block truncate text-xs text-muted hover:text-white hover:underline">{song.artist.name}</Link>
-                {external && (
-                  <button onClick={() => setCredits(true)} title={song.attribution || undefined}
-                    className="block max-w-full truncate text-[11px] text-subtle hover:text-white">
-                    {[licenseShort(song), song.source_name].filter(Boolean).join(' · ')}
-                  </button>
+                {episode ? (
+                  <>
+                    <Link to={`/podcast/${encodeURIComponent(song.podcast_id)}`} className="block truncate text-sm font-semibold hover:underline">{song.title}</Link>
+                    <span className="block truncate text-xs text-muted">{song.artist.name}</span>
+                  </>
+                ) : (
+                  <>
+                    <Link to={song.album ? `/album/${song.album.id}` : `/artist/${song.artist.id}`} className="block truncate text-sm font-semibold hover:underline">{song.title}</Link>
+                    <Link to={`/artist/${song.artist.id}`} className="block truncate text-xs text-muted hover:text-white hover:underline">{song.artist.name}</Link>
+                  </>
                 )}
+                <div className="flex items-center gap-1.5">
+                  <AccessBadge song={song} />
+                  {external && (
+                    <button onClick={() => setCredits(true)} title={song.attribution || undefined}
+                      className="block max-w-full truncate text-[11px] text-subtle hover:text-white">
+                      {[song.license_code !== 'preview' && licenseShort(song), song.source_name].filter(Boolean).join(' · ')}
+                    </button>
+                  )}
+                </div>
               </div>
-              <LikeButton song={song} className="ml-2 hidden sm:block" />
+              {!episode && <LikeButton song={song} className="ml-2 hidden sm:block" />}
             </>
           ) : (
             <p className="text-sm text-muted">Pick something to play</p>
@@ -62,10 +75,10 @@ export default function PlayerBar({ onToggleQueue, queueOpen }) {
           <div className="flex items-center gap-4 md:gap-5">
             <button onClick={p.toggleShuffle} disabled={Boolean(p.session)} aria-pressed={p.shuffle} aria-label="Shuffle (S)" title="Shuffle (S)"
               className={`hidden disabled:opacity-30 md:block ${p.shuffle ? 'text-accent' : 'text-muted hover:text-white'}`}><Shuffle className="size-4" /></button>
-            <button onClick={p.prev} disabled={!song || memberLocked} aria-label="Previous (Shift+←)" title="Previous (Shift+←)" className="hidden text-muted hover:text-white disabled:opacity-30 md:block"><SkipBack className="size-5" fill="currentColor" /></button>
+            <button onClick={p.prev} disabled={!song || memberLocked} aria-label="Previous (Shift+←)" title="Previous (Shift+←)" className="text-muted hover:text-white disabled:opacity-30"><SkipBack className="size-5" fill="currentColor" /></button>
             <button onClick={p.toggle} disabled={!song || memberLocked} aria-label={p.isPlaying ? 'Pause (Space)' : 'Play (Space)'}
               className="flex size-9 items-center justify-center rounded-full bg-white text-black transition hover:scale-105 disabled:opacity-40">
-              {p.buffering && p.isPlaying ? <Spinner className="size-4" /> : p.isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="ml-0.5 size-4" fill="currentColor" />}
+              {p.buffering ? <Spinner className="size-4" /> : p.isPlaying ? <Pause className="size-4" fill="currentColor" /> : <Play className="ml-0.5 size-4" fill="currentColor" />}
             </button>
             <button onClick={p.next} disabled={!song || memberLocked} aria-label="Next (Shift+→)" title="Next (Shift+→)" className="text-muted hover:text-white disabled:opacity-30"><SkipForward className="size-5" fill="currentColor" /></button>
             <button onClick={p.cycleRepeat} disabled={Boolean(p.session)} aria-label={`Repeat: ${p.repeat} (R)`} title={`Repeat: ${p.repeat} (R)`}
@@ -88,7 +101,7 @@ export default function PlayerBar({ onToggleQueue, queueOpen }) {
           <Slider value={p.muted ? 0 : p.volume} max={1} onChange={p.setVolume} label="Volume" className="max-w-28" />
         </div>
       </div>
-      <CreditsModal song={song} open={credits} onClose={() => setCredits(false)} />
+      {!episode && <CreditsModal song={song} open={credits} onClose={() => setCredits(false)} />}
       {/* Thin progress line for mobile */}
       <div className="mt-2 h-0.5 w-full rounded bg-zinc-700 md:hidden">
         <div className="h-full rounded bg-white" style={{ width: `${p.duration ? (p.position / p.duration) * 100 : 0}%` }} />

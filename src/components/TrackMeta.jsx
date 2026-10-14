@@ -1,6 +1,6 @@
 import { ExternalLink, Lock } from 'lucide-react'
 import { LANGUAGE_SOURCES, languageName, useLanguages } from '../lib/languages'
-import { isUnavailable, licenseShort } from '../lib/tracks'
+import { ACCESS, accessOf, isUnavailable, licenseShort } from '../lib/tracks'
 import { Modal } from './ui'
 
 export function LanguageTag({ code, className = '' }) {
@@ -14,9 +14,23 @@ export function LanguageTag({ code, className = '' }) {
   )
 }
 
+/** Full Track / Preview / Metadata Only (and Podcast for episodes), straight from the provider's own rights data. */
+export function AccessBadge({ song, className = '' }) {
+  if (!song) return null
+  const kind = song.access === 'podcast' ? 'podcast' : accessOf(song)
+  const meta = kind === 'podcast' ? { label: 'Podcast', tone: 'text-sky-300 border-sky-400/40' } : ACCESS[kind]
+  const title = {
+    full: 'A complete recording, streamed from the source',
+    preview: "A short clip supplied by the provider - the full recording isn't available here",
+    metadata: 'Known to the catalog, but no authorized audio is available here',
+    podcast: "The publisher's own episode audio",
+  }[kind]
+  return <span title={title} className={`shrink-0 rounded-sm border px-1 text-[10px] font-bold leading-4 ${meta.tone} ${className}`}>{meta.label}</span>
+}
+
 export function LicenseBadge({ song, className = '' }) {
   const label = licenseShort(song)
-  if (!label) return null
+  if (!label || song.license_code === 'preview') return null // the Preview access badge already says it
   const tone = song.license_code === 'unknown' ? 'text-amber-300 border-amber-400/40' : 'text-sky-300 border-sky-400/40'
   return <span title={song.license_name || label} className={`shrink-0 rounded-sm border px-1 text-[10px] font-bold leading-4 ${tone} ${className}`}>{label}</span>
 }

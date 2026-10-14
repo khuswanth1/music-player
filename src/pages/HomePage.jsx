@@ -1,13 +1,14 @@
 import { Link } from 'react-router'
 import { catalogApi } from '../api/endpoints'
 import { AlbumCard, CardRow, PlaylistCard } from '../components/Cards'
+import HomeWorld from '../components/HomeSections'
 import TrackList from '../components/TrackList'
 import { CardGridSkeleton, Cover, ErrorState, SectionHeader, Skeleton, TrackListSkeleton } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import { usePlayer } from '../context/PlayerContext'
 import { useApi } from '../hooks/useApi'
 import { greeting } from '../lib/format'
-import { songCover } from '../lib/tracks'
+import { isUnavailable, songCover } from '../lib/tracks'
 
 export default function HomePage() {
   const { user } = useAuth()
@@ -15,6 +16,7 @@ export default function HomePage() {
   const { playList } = usePlayer()
 
   if (error) return <ErrorState error={error} onRetry={reload} />
+  const recent = (data?.recently_played || []).filter((s) => !isUnavailable(s)) // tracks that are no longer offered stay out of the shelf
 
   return (
     <div className="space-y-10 px-4 md:px-6">
@@ -34,13 +36,13 @@ export default function HomePage() {
         )}
       </section>
 
-      {(loading || data.recently_played.length > 0) && (
+      {(loading || recent.length > 0) && (
         <section>
           <SectionHeader title="Recently played" to="/history" LinkComponent={Link} />
           {loading ? <TrackListSkeleton rows={4} /> : (
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
-              {data.recently_played.map((song, i) => (
-                <button key={song.id} onClick={() => playList(data.recently_played, i, { type: 'history', name: 'Recently played' })}
+              {recent.map((song, i) => (
+                <button key={song.id} onClick={() => playList(recent, i, { type: 'history', name: 'Recently played' })}
                   className="group rounded-md bg-surface p-2 text-left hover:bg-elevated">
                   <Cover src={songCover(song)} seed={song.album?.id} alt="" className="w-full" />
                   <p className="mt-2 truncate text-sm font-semibold">{song.title}</p>
@@ -93,7 +95,7 @@ export default function HomePage() {
       </section>
 
       <section>
-        <SectionHeader title="Trending this week" />
+        <SectionHeader title="Worldwide music: most played here" />
         {loading ? <TrackListSkeleton rows={5} /> : (
           <TrackList items={data.trending.slice(0, 5).map((song) => ({ song }))} context={{ type: 'trending', name: 'Trending' }} />
         )}
@@ -103,6 +105,8 @@ export default function HomePage() {
         <SectionHeader title="New releases" />
         {loading ? <CardGridSkeleton /> : <CardRow>{data.new_releases.map((a) => <AlbumCard key={a.id} album={a} />)}</CardRow>}
       </section>
+
+      {!loading && <HomeWorld />}
 
       {!loading && data.public_playlists.length > 0 && (
         <section>

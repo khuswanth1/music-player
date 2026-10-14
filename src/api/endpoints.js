@@ -155,3 +155,66 @@ export const adminApi = {
   takedown: (id, reason) => api(`/admin/songs/${id}/takedown`, { method: 'POST', body: reason ? { reason } : {} }),
   restore: (id) => api(`/admin/songs/${id}/takedown`, { method: 'DELETE' }),
 }
+
+export const searchApi = {
+  global: (query, signal) => api('/search/global', { query, signal }),
+  suggestions: (q, signal) => api('/search/suggestions', { query: { q }, signal }),
+  history: () => api('/me/search-history'),
+  record: (query) => api('/me/search-history', { method: 'POST', body: { query } }),
+  clear: (query) => api('/me/search-history', { method: 'DELETE', query: { query } }),
+}
+
+export const worldApi = {
+  latest: (query, signal) => api('/music/latest', { query, signal }),
+  old: (query, signal) => api('/music/old', { query, signal }),
+  countries: () => api('/music/countries'),
+  genres: (query) => api('/music/genres', { query }),
+  tracks: (query, signal) => api('/music/tracks', { query, signal }),
+  albums: (query, signal) => api('/music/albums', { query, signal }),
+  fetchGenre: (genre, page = 0) => api('/music/genres/fetch', { method: 'POST', body: { genre, page } }),
+  soundtracks: (query, signal) => api('/music/soundtracks', { query, signal }),
+  movies: (query, signal) => api('/music/movies', { query, signal }),
+  soundtrack: (id) => api(`/music/soundtracks/${encodeURIComponent(id)}`),
+  searchArtists: (query, signal) => api('/artists/search', { query, signal }),
+  catalogArtists: (query, signal) => api('/music/artists', { query, signal }),
+  artistProfile: (id) => api(`/artists/${id}/profile`),
+  searchAlbums: (query, signal) => api('/albums/search', { query, signal }),
+}
+
+export const podcastApi = {
+  categories: () => api('/podcasts/categories'),
+  search: (query, signal) => api('/podcasts/search', { query, signal }),
+  searchEpisodes: (query, signal) => api('/podcasts/episodes/search', { query, signal }),
+  get: (id) => api(`/podcasts/${encodeURIComponent(id)}`),
+  episodes: (id, query, signal) => api(`/podcasts/${encodeURIComponent(id)}/episodes`, { query, signal }),
+  following: () => api('/me/podcasts'),
+  follow: (podcast) => api(`/me/podcasts/${encodeURIComponent(podcast.id)}`, {
+    method: 'PUT', body: { title: podcast.title, publisher: podcast.publisher, image_url: podcast.image_url, language: podcast.language } }),
+  unfollow: (id) => api(`/me/podcasts/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  latestFollowed: () => api('/me/podcasts/latest/episodes'),
+  saved: () => api('/me/episodes'),
+  save: (ep) => api('/me/episodes/save', { method: 'PUT', query: { episode_id: ep.id }, body: episodeSnapshot(ep) }),
+  unsave: (ep) => api('/me/episodes/save', { method: 'DELETE', query: { episode_id: ep.id } }),
+  progress: (ep, position_s, completed = false) => api('/me/episodes/progress', {
+    method: 'PUT', body: { ...episodeSnapshot(ep), episode_id: ep.id, position_s: Math.round(position_s), completed } }),
+  history: (page = 1) => api('/me/episodes/progress', { query: { page, page_size: 30 } }),
+}
+
+function episodeSnapshot(ep) {
+  return { podcast_id: ep.podcast_id, title: ep.title, podcast_title: ep.podcast_title, image_url: ep.image_url,
+    audio_url: ep.audio_url, duration_s: ep.duration_s, published_at: ep.published_at,
+    description: ep.description ? ep.description.slice(0, 4000) : null }
+}
+
+export const privateAlbumApi = {
+  list: (query) => api('/private-albums', { query }),
+  get: (id) => api(`/private-albums/${id}`),
+  shared: (code) => api(`/private-albums/shared/${encodeURIComponent(code)}`),
+  create: (data) => api('/private-albums', { method: 'POST', body: data }),
+  update: (id, data) => api(`/private-albums/${id}`, { method: 'PATCH', body: data }),
+  cover: (id, file) => api(`/private-albums/${id}/cover`, { method: 'POST', body: form({ file }) }),
+  share: (id) => api(`/private-albums/${id}/share`, { method: 'POST' }),
+  remove: (id) => api(`/private-albums/${id}`, { method: 'DELETE' }),
+  addTracks: (id, song_ids) => api(`/private-albums/${id}/tracks`, { method: 'POST', body: { song_ids } }),
+  removeTrack: (id, itemId) => api(`/private-albums/${id}/tracks/${itemId}`, { method: 'DELETE' }),
+}

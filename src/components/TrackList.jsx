@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { ArrowDown, ArrowUp, Clock3, Crown, Disc3, Download, ExternalLink, Heart, Info, ListPlus, MoreHorizontal, Pause, Play, Plus, Trash2, User2 } from 'lucide-react'
-import { musicApi } from '../api/endpoints'
+import { ArrowDown, ArrowUp, Clock3, Crown, Disc3, Download, ExternalLink, FolderLock, Heart, Info, ListPlus, MoreHorizontal, Pause, Play, Plus, Trash2, User2 } from 'lucide-react'
+import { musicApi, privateAlbumApi } from '../api/endpoints'
 import { useLibrary } from '../context/LibraryContext'
 import { usePlayer } from '../context/PlayerContext'
 import { useToast } from '../context/ToastContext'
 import { formatDuration, timeAgo } from '../lib/format'
 import { isUnavailable, songCover } from '../lib/tracks'
-import { CreditsModal, LanguageTag, LicenseBadge, RestrictionNote } from './TrackMeta'
+import { AccessBadge, CreditsModal, LanguageTag, LicenseBadge, RestrictionNote } from './TrackMeta'
 import { Cover, Equalizer } from './ui'
 
 export function LikeButton({ song, className = '', hoverOnly = false }) {
@@ -22,9 +22,12 @@ export function LikeButton({ song, className = '', hoverOnly = false }) {
   )
 }
 
+const onlyEpisode = (song) => song?.kind === 'episode'
+
 export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
   const [open, setOpen] = useState(false)
   const [showPlaylists, setShowPlaylists] = useState(false)
+  const [showAlbums, setShowAlbums] = useState(null) // null = closed, else the user's private albums
   const [credits, setCredits] = useState(false)
   const ref = useRef(null)
   const { addToQueue } = usePlayer()
@@ -37,6 +40,25 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
     try {
       const res = await musicApi.download(song.id)
       window.open(res.url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      toast.apiError(err)
+    }
+  }
+
+  const openAlbums = async () => {
+    try {
+      setShowAlbums(await privateAlbumApi.list())
+    } catch (err) {
+      toast.apiError(err)
+    }
+  }
+
+  const addToAlbum = async (album) => {
+    setOpen(false)
+    setShowAlbums(null)
+    try {
+      await privateAlbumApi.addTracks(album.id, [song.id])
+      toast.success(`Added to ${album.name}`)
     } catch (err) {
       toast.apiError(err)
     }
@@ -57,7 +79,7 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
   const item = 'flex w-full items-center gap-3 rounded px-3 py-2 text-left text-sm hover:bg-hover'
   return (
     <div className="relative" ref={ref}>
-      <button onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); setShowPlaylists(false) }}
+      <button onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); setShowPlaylists(false); setShowAlbums(null) }}
         aria-label={`More options for ${song.title}`} aria-haspopup="menu" aria-expanded={open}
         className="rounded p-1 text-muted hover:text-white">
         <MoreHorizontal className="size-5" />
@@ -65,13 +87,26 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
       {open && (
         <div role="menu" onClick={(e) => e.stopPropagation()}
           className="absolute right-0 top-8 z-30 w-60 rounded-md bg-elevated p-1 shadow-2xl ring-1 ring-line">
-          {!showPlaylists ? (
+          {showAlbums ? (
+            <div className="max-h-64 overflow-y-auto">
+              <p className="px-3 py-2 text-xs font-bold uppercase text-subtle">Add to private album</p>
+              {showAlbums.length === 0 && <p className="px-3 py-2 text-sm text-muted">You have no private albums yet. <Link to="/private-albums" className="underline">Create one</Link>.</p>}
+              {showAlbums.map((a) => (
+                <button key={a.id} role="menuitem" className={item} onClick={() => addToAlbum(a)}>
+                  <span className="truncate">{a.name}</span>
+                </button>
+              ))}
+            </div>
+          ) : !showPlaylists ? (
             <>
               <button role="menuitem" className={item} onClick={() => { addToQueue(song); setOpen(false) }}>
                 <ListPlus className="size-4" /> Add to queue
               </button>
               <button role="menuitem" className={item} onClick={() => setShowPlaylists(true)}>
                 <Plus className="size-4" /> Add to playlist
+              </button>
+              <button role="menuitem" className={item} onClick={openAlbums}>
+                <FolderLock className="size-4" /> Add to private album
               </button>
               <Link role="menuitem" to={`/artist/${song.artist.id}`} className={item}><User2 className="size-4" /> Go to artist</Link>
               {song.album && <Link role="menuitem" to={`/album/${song.album.id}`} className={item}><Disc3 className="size-4" /> Go to album</Link>}
@@ -80,6 +115,12 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
               </button>
               {external && song.download_allowed && (
                 <button role="menuitem" className={item} onClick={download}><Download className="size-4" /> Download (from {song.source_name})</button>
+              )}
+              {song.access !== 'full' && !onlyEpisode(song) && (
+                <a role="menuitem" href={`https://open.spotify.com/search/${encodeURIComponent(`${song.title} ${song.artist.name}`)}`}
+                  target="_blank" rel="noopener noreferrer" className={item}>
+                  <ExternalLink className="size-4" /> Find the full song on Spotify
+                </a>
               )}
               {external && song.source_url && (
                 <a role="menuitem" href={song.source_url} target="_blank" rel="noopener noreferrer" className={item}>
@@ -91,7 +132,7 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
               {onMoveDown && <button role="menuitem" className={item} onClick={() => { onMoveDown(); setOpen(false) }}><ArrowDown className="size-4" /> Move down</button>}
               {onRemove && (
                 <button role="menuitem" className={`${item} text-danger`} onClick={() => { onRemove(); setOpen(false) }}>
-                  <Trash2 className="size-4" /> Remove from this playlist
+                  <Trash2 className="size-4" /> Remove from this list
                 </button>
               )}
             </>
@@ -184,6 +225,7 @@ export default function TrackList({ items, context, showAlbum = true, showCover 
                   {song.is_premium && <Crown className="size-3.5 shrink-0 text-amber-300" aria-label="Premium" />}
                   {song.explicit && <span className="rounded-sm bg-zinc-400 px-1 text-[10px] font-bold text-black">E</span>}
                   <LanguageTag code={song.language} className="hidden sm:inline" />
+                  <AccessBadge song={song} />
                   {song.source && song.source !== 'local' && <LicenseBadge song={song} className="hidden lg:inline" />}
                 </div>
                 <div className="flex min-w-0 items-center gap-2">

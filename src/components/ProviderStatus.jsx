@@ -23,7 +23,7 @@ export function ProviderStatusList({ providers, className = '' }) {
             className={`rounded-full px-2.5 py-1 ring-1 ${ok ? 'text-zinc-200 ring-zinc-600' : 'text-subtle ring-line'}`}
           >
             <span className="font-semibold">{p.name}</span>{' '}
-            {ok ? <span className="text-muted">• {p.count}</span> : <span>• {LABELS[p.status] || p.status}</span>}
+            {ok ? <span className="text-muted">· {p.count}</span> : <span>· {LABELS[p.status] || p.status}</span>}
           </li>
         )
       })}

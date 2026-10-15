@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router'
-import { useAuth } from '../../context/AuthContext'
+import { needsOnboarding, useAuth } from '../../context/AuthContext'
 import { usePlayer } from '../../context/PlayerContext'
 import { SHORTCUTS, useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import PlayerBar from '../player/PlayerBar'
@@ -10,8 +10,9 @@ import MobileNav from './MobileNav'
 import Sidebar from './Sidebar'
 import TopBar from './TopBar'
 
-export function RequireAuth({ children }) {
-  const { status } = useAuth()
+/** `onboarding` marks the welcome route itself, which must stay reachable for people who still have to see it. */
+export function RequireAuth({ children, onboarding = false }) {
+  const { status, user } = useAuth()
   const location = useLocation()
   if (status === 'loading') {
     return <div className="flex h-full items-center justify-center"><Spinner className="size-8 text-accent" /></div>
@@ -20,6 +21,8 @@ export function RequireAuth({ children }) {
     const next = encodeURIComponent(location.pathname + location.search)
     return <Navigate to={`/login?next=${next}`} replace />
   }
+  if (!onboarding && needsOnboarding(user)) return <Navigate to="/welcome" replace />
+  if (onboarding && !needsOnboarding(user)) return <Navigate to="/" replace />
   return children
 }
 

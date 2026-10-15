@@ -86,7 +86,8 @@ export class RealtimeClient {
       const subs = [...this.handlers.keys()].filter((c) => !c.startsWith('*')).map((channel) => ({ type: 'subscribe', channel }))
       const queued = this.pending.filter((m) => m.type !== 'subscribe' && m.type !== 'unsubscribe')
       this.pending = []
-      for (const m of [...subs, ...queued]) this.ws.send(JSON.stringify(m))
+      // The socket can be replaced or closed while messages from the old one are still arriving.
+      if (this.ws?.readyState === WebSocket.OPEN) for (const m of [...subs, ...queued]) this.ws.send(JSON.stringify(m))
       const interval = (msg.heartbeat_interval || 25) * 1000
       clearInterval(this.watchdog)
       this.watchdog = setInterval(() => {
@@ -96,7 +97,7 @@ export class RealtimeClient {
       return
     }
     if (msg.type === 'ping') {
-      this.ws?.send(JSON.stringify({ type: 'pong' }))
+      if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'pong' }))
       return
     }
     // The server canonicalises 'user:me' to 'user:<id>'.

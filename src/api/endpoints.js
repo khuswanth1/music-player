@@ -20,6 +20,8 @@ export const authApi = {
 }
 
 export const meApi = {
+  saveSettings: (prefs) => api('/me/settings', { method: 'PUT', body: prefs }),
+  completeOnboarding: (genres) => api('/me/onboarding', { method: 'PUT', body: genres ? { genres } : {} }),
   get: () => api('/me'),
   update: (data) => api('/me', { method: 'PATCH', body: data }),
   changePassword: (data) => api('/me/password', { method: 'POST', body: data }),
@@ -42,6 +44,12 @@ export const catalogApi = {
   albums: (query) => api('/albums', { query }),
   album: (id) => api(`/albums/${id}`),
   search: (query, signal) => api('/search', { query, signal }),
+}
+
+export const mixApi = {
+  list: () => api('/me/mixes'),
+  forYou: () => api('/me/for-you'),
+  get: (id) => api(`/me/mixes/${encodeURIComponent(id)}`),
 }
 
 export const musicApi = {
@@ -177,6 +185,7 @@ export const worldApi = {
   soundtrack: (id) => api(`/music/soundtracks/${encodeURIComponent(id)}`),
   searchArtists: (query, signal) => api('/artists/search', { query, signal }),
   catalogArtists: (query, signal) => api('/music/artists', { query, signal }),
+  artistPhotos: (ids) => api('/music/artists/photos', { method: 'POST', body: { ids } }),
   artistProfile: (id) => api(`/artists/${id}/profile`),
   searchAlbums: (query, signal) => api('/albums/search', { query, signal }),
 }

@@ -19,6 +19,8 @@ import AdminLayout, { RequirePermission } from './pages/admin/AdminLayout'
 
 // Rarely-visited pages load on demand so the first screen ships less JavaScript.
 const named = (loader, name) => lazy(() => loader().then((m) => ({ default: m[name] })))
+const MixPage = lazy(() => import('./pages/MixPage'))
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'))
 const AccountPage = named(() => import('./pages/AccountPages'), 'AccountPage')
 const DevCheckoutPage = named(() => import('./pages/AccountPages'), 'DevCheckoutPage')
 const PremiumPage = named(() => import('./pages/AccountPages'), 'PremiumPage')
@@ -74,8 +76,10 @@ export default function App() {
                     <Route path="/forgot-password" element={<ForgotPasswordPage />} />
                     <Route path="/reset-password" element={<ResetPasswordPage />} />
                     <Route path="/auth/callback" element={<AuthCallbackPage />} />
+                    <Route path="/welcome" element={<RequireAuth onboarding><OnboardingPage /></RequireAuth>} />
                     <Route element={<RequireAuth><AppLayout /></RequireAuth>}>
                       <Route index element={<HomePage />} />
+                      <Route path="mix/:id" element={<MixPage />} />
                       <Route path="search" element={<SearchPage />} />
                       <Route path="library" element={<LibraryPage />} />
                       <Route path="collection/tracks" element={<LikedSongsPage />} />

@@ -24,14 +24,15 @@ _EXTERNAL_URL_TTL = 6 * 3600
 
 @router.get("/songs/{song_id}/stream-url", response_model=StreamUrl,
             responses={451: {"description": "The track's license or provider terms don't permit playback here"}})
-def stream_url(song_id: uuid.UUID, user: CurrentUser, db: DB):
+def stream_url(song_id: uuid.UUID, user: CurrentUser, db: DB, fast: bool = False):
     """Entitlement check happens here. Hosted songs get a URL with a token scoped to this one song;
     provider tracks get the provider's own authorized stream, after their rights are (re)verified."""
     song = catalog_svc.get_song(db, song_id, user)
     if not song.is_local:
-        url = federation.playback_url(db, song)
-        return StreamUrl(url=url, expires_in=_EXTERNAL_URL_TTL, mime_type=None, external=True,
-                         attribution=song.attribution)
+        url, upgrading = federation.playback_url_fast(db, song, wait=not fast)
+        # A preview given while the full track resolves is only good for a moment; the player asks again.
+        return StreamUrl(url=url, expires_in=10 if upgrading else _EXTERNAL_URL_TTL, mime_type=None, external=True,
+                         attribution=song.attribution, upgrading=upgrading)
     if not song.audio_key:
         raise NotFound("This song has no audio yet", code="audio_missing")
     if song.is_premium:

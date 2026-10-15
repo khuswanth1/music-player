@@ -136,6 +136,7 @@ class SongOut(ORMModel):
     license_name: str | None = None
     license_url: str | None = None
     attribution: str | None = None
+    upgrading: bool = Field(False, description="True when this is a short preview and the full stream is still being resolved")
     country: str | None = Field(None, description="Release country (ISO 3166-1) when a provider states it; null = Unknown")
     release_date: date | None = Field(None, description="Release date of the track's album, when known")
 
@@ -185,3 +186,4 @@ class StreamUrl(BaseModel):
     mime_type: str | None
     external: bool = Field(False, description="True when the URL is the provider's own authorized stream")
     attribution: str | None = None
+    upgrading: bool = Field(False, description="True when this is a short preview and the full stream is still being resolved")

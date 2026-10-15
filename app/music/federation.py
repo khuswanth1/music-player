@@ -341,6 +341,13 @@ def verify(db: Session, song: Song) -> Song:
 
 def playback_url(db: Session, song: Song) -> str:
     """The authorized URL for a provider track, after (re)verifying its rights if the last check is stale."""
+    return playback_url_fast(db, song, wait=True)[0]
+
+
+def playback_url_fast(db: Session, song: Song, *, wait: bool = False) -> tuple[str, bool]:
+    """Like playback_url, but with wait=False a track whose full-length audio isn't resolved yet answers at once with
+    the provider's short preview and resolves the full stream in the background.
+    Returns (url, upgrading): when upgrading is True the caller should ask again shortly for the full stream."""
     provider = get_provider(song.source)
     if provider is None or not is_enabled(provider):
         raise PlaybackRestricted("This source is currently disabled on this server", code="source_disabled")
@@ -369,9 +376,12 @@ def playback_url(db: Session, song: Song) -> str:
         or (song.remote_stream_url and "mzstatic" in song.remote_stream_url)
     ):
         try:
-            from app.music.resolver import resolve_full_stream
+            from app.music.resolver import is_cached, resolve_full_stream, warm
 
             artist_name = song.artist.name if song.artist else None
+            if not wait and raw_url and not is_cached(song.title, artist_name):
+                warm(song.title, artist_name, raw_url)
+                return raw_url, True
             full_url, full_dur_s = resolve_full_stream(song.title, artist_name, fallback_url=raw_url)
             if full_dur_s and full_dur_s > 0:
                 new_dur_ms = full_dur_s * 1000
@@ -383,11 +393,11 @@ def playback_url(db: Session, song: Song) -> str:
                 except Exception:
                     db.rollback()
             if full_url:
-                return full_url
+                return full_url, False
         except Exception as exc:
             log.warning("Failed to resolve full stream for song %s: %s", song.id, exc)
 
-    return raw_url
+    return raw_url, False
 
 
 

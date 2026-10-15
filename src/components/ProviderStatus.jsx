@@ -18,7 +18,7 @@ export function ProviderStatusList({ providers, className = '' }) {
         const ok = p.status === 'ok'
         return (
           <li
-            key={`${p.key}-${p.name || idx}`}
+            key={`${p.key}-${idx}`}
             title={p.message || undefined}
             className={`rounded-full px-2.5 py-1 ring-1 ${ok ? 'text-zinc-200 ring-zinc-600' : 'text-subtle ring-line'}`}
           >

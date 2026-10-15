@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router'
 import { ListMusic, Pause, Play, Repeat, Repeat1, Shuffle, SkipBack, SkipForward, Users, Volume1, Volume2, VolumeX } from 'lucide-react'
-import { usePlayer } from '../../context/PlayerContext'
+import { usePlayer, usePlayerPosition } from '../../context/PlayerContext'
 import { formatDuration } from '../../lib/format'
 import { LikeButton } from '../TrackList'
 import { isEpisode, licenseShort, songCover } from '../../lib/tracks'
@@ -21,12 +21,13 @@ function Slider({ value, max, onChange, onCommit, label, className = '', disable
 
 export default function PlayerBar({ onToggleQueue, queueOpen }) {
   const p = usePlayer()
+  const position = usePlayerPosition()
   const [scrub, setScrub] = useState(null)
   const [credits, setCredits] = useState(false)
   const song = p.current
   const episode = isEpisode(song)
   const external = song && !episode && song.source && song.source !== 'local'
-  const shownPos = scrub ?? p.position
+  const shownPos = scrub ?? position
   const memberLocked = p.session && !p.session.isHost
   const VolumeIcon = p.muted || p.volume === 0 ? VolumeX : p.volume < 0.5 ? Volume1 : Volume2
 
@@ -104,7 +105,7 @@ export default function PlayerBar({ onToggleQueue, queueOpen }) {
       {!episode && <CreditsModal song={song} open={credits} onClose={() => setCredits(false)} />}
       {/* Thin progress line for mobile */}
       <div className="mt-2 h-0.5 w-full rounded bg-zinc-700 md:hidden">
-        <div className="h-full rounded bg-white" style={{ width: `${p.duration ? (p.position / p.duration) * 100 : 0}%` }} />
+        <div className="h-full rounded bg-white" style={{ width: `${p.duration ? (position / p.duration) * 100 : 0}%` }} />
       </div>
     </footer>
   )

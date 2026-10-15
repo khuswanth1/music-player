@@ -10,9 +10,10 @@ export function ToastProvider({ children }) {
 
   const dismiss = useCallback((id) => setToasts((t) => t.filter((x) => x.id !== id)), [])
 
-  const push = useCallback((message, { type = 'info', action, duration = 4000 } = {}) => {
+  const push = useCallback((message, { type = 'info', action, duration = 4000, id: key } = {}) => {
     const id = ++idRef.current
-    setToasts((t) => [...t.slice(-3), { id, message, type, action }])
+    // A toast with a `key` replaces any earlier one with the same key instead of stacking duplicates.
+    setToasts((t) => [...t.filter((x) => !key || x.key !== key).slice(-3), { id, key, message, type, action }])
     if (duration) setTimeout(() => dismiss(id), duration)
     return id
   }, [dismiss])

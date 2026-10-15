@@ -9,6 +9,8 @@ import { useSpotify } from './SpotifyContext'
 import { useToast } from './ToastContext'
 
 const PlayerContext = createContext(null)
+// Playback position ticks ~4x/second; it lives in its own context so only the seek bar re-renders, not every track list.
+const PositionContext = createContext(0)
 const STORAGE_KEY = 'wavely.player.v2' // v1 snapshots may hold tracks that are no longer offered (30-second previews)
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // Errors after which we move on to the next song instead of stopping.
@@ -40,12 +42,19 @@ export function PlayerProvider({ children }) {
   isPlayingRef.current = isPlaying
   const audioRef = useRef(null)
   const urlCache = useRef(new Map()) // songId -> { url, expiresAt }
+  const pendingUrls = useRef(new Map()) // songId -> in-flight stream-url request
+  const inflightRef = useRef(new Map())
   const wantPlayRef = useRef(false)
   const pendingSeekRef = useRef(null)
   const listenRef = useRef({ songId: null, ms: 0, lastTime: null, context: null })
   const restoredRef = useRef(false)
   const episodeRef = useRef({ item: null, positionMs: 0, reportedAt: 0 }) // podcast episode being listened to
   const retriedRef = useRef(null) // song id whose stream already got one fresh-URL retry
+  const upgradeRef = useRef(null) // song id whose full stream we are still waiting for
+  const failedRef = useRef(false) // the current song could not be loaded; Play must retry instead of doing nothing
+  const swappingRef = useRef(false) // true while we pause the old song ourselves for a skip
+  const srcRef = useRef('') // the src we set last; error events for any other src are stale and ignored
+  const failuresRef = useRef(0) // consecutive songs that failed to play (stops auto-skip from looping)
   const stateRef = useRef(state)
   stateRef.current = state
   const sessionRef = useRef(session)
@@ -84,9 +93,47 @@ export function PlayerProvider({ children }) {
   const streamUrlFor = useCallback(async (songId, force = false) => {
     const cached = urlCache.current.get(songId)
     if (!force && cached && cached.expiresAt > Date.now() + 60_000) return cached.url
-    const res = await catalogApi.streamUrl(songId)
-    urlCache.current.set(songId, { url: res.url, expiresAt: Date.now() + res.expires_in * 1000 })
-    return res.url
+    // Share one request between a hover prefetch, the click and the queue look-ahead.
+    const pending = !force && pendingUrls.current.get(songId)
+    if (pending) return pending
+    // fast: start on the short preview immediately if the full track isn't resolved yet; upgradeStream swaps it in later.
+    const req = catalogApi.streamUrl(songId, true).then((res) => {
+      urlCache.current.set(songId, { url: res.url, expiresAt: Date.now() + res.expires_in * 1000, upgrading: Boolean(res.upgrading) })
+      return res.url
+    }).finally(() => pendingUrls.current.delete(songId))
+    pendingUrls.current.set(songId, req)
+    return req
+  }, [])
+
+  // A song that started on a short preview: poll until the full stream is ready, then swap it in without losing the spot.
+  const upgradeStream = useCallback(async (songId) => {
+    upgradeRef.current = songId
+    for (let i = 0; i < 30 && upgradeRef.current === songId; i++) {
+      await new Promise((r) => setTimeout(r, 1500))
+      if (upgradeRef.current !== songId) return
+      let res
+      try {
+        res = await catalogApi.streamUrl(songId, true)
+      } catch {
+        break
+      }
+      if (res.upgrading) continue
+      urlCache.current.set(songId, { url: res.url, expiresAt: Date.now() + res.expires_in * 1000, upgrading: false })
+      const audio = audioRef.current
+      if (upgradeRef.current !== songId || !audio || listenRef.current.songId !== songId) return
+      const at = audio.currentTime
+      const wasPlaying = !audio.paused || (wantPlayRef.current && audio.ended)
+      audio.src = res.url
+      srcRef.current = audio.src
+      audio.addEventListener('loadedmetadata', () => { audio.currentTime = at }, { once: true })
+      if (wasPlaying || wantPlayRef.current) audio.play().catch(() => {})
+      break
+    }
+    if (upgradeRef.current === songId) {
+      upgradeRef.current = null
+      // Never got the full track: let a preview that ran out move on as usual.
+      if (audioRef.current?.ended) dispatch({ type: 'next', auto: true })
+    }
   }, [])
 
   // Load audio whenever the current song changes (or repeat-one restarts it).
@@ -98,6 +145,8 @@ export function PlayerProvider({ children }) {
     flushListen(false)
     flushEpisode(false)
     retriedRef.current = null
+    failedRef.current = false
+    upgradeRef.current = null
     const episode = isEpisode(current)
     if (!episode && isUnavailable(current)) { // e.g. restored from an old queue: don't even ask the server, just move on
       setBuffering(false)
@@ -118,15 +167,18 @@ export function PlayerProvider({ children }) {
     const trySpotify = !episode && current.access === 'preview' && spotifyRef.current.ready && wantPlayRef.current
     if (engineRef.current === 'spotify') spotifyRef.current.pause?.()
     engineRef.current = 'audio'
+    // Silence the previous song right away so Next/Previous feel instant instead of waiting on the network.
+    if (!audio.paused) { swappingRef.current = true; audio.pause() }
     const startAudio = (url) => {
       audio.src = url
+      srcRef.current = audio.src
       if (pendingSeekRef.current != null) {
         const seekTo = pendingSeekRef.current / 1000
         audio.addEventListener('loadedmetadata', () => { audio.currentTime = seekTo }, { once: true })
         pendingSeekRef.current = null
       }
       if (wantPlayRef.current) {
-        audio.play().catch(() => setIsPlaying(false)) // autoplay may be blocked until the user interacts
+        audio.play().catch(() => { isPlayingRef.current = false; setIsPlaying(false) }) // autoplay may be blocked until the user interacts
       }
     }
     const source = trySpotify
@@ -152,13 +204,15 @@ export function PlayerProvider({ children }) {
           }
         }
         startAudio(url)
+        if (!episode && urlCache.current.get(currentId)?.upgrading) upgradeStream(currentId)
       })
       .catch((err) => {
         if (cancelled) return
         setBuffering(false)
+        failedRef.current = true
         const skippable = SKIPPABLE.has(err.code) || err.status === 404 || err.status === 451
         if (skippable) toast.info("Skipped a track that isn't available here")
-        else toast.apiError(err, "Couldn't play this song")
+        else { toast.apiError(err, "Couldn't play this song"); setIsPlaying(false); wantPlayRef.current = false }
         if (skippable) {
           // skip to the next playable song
           if (stateRef.current.index + 1 < stateRef.current.queue.length) dispatch({ type: 'next' })
@@ -198,23 +252,42 @@ export function PlayerProvider({ children }) {
       }
       l.lastTime = t
     }
-    const onPlay = () => { setIsPlaying(true); listenRef.current.lastTime = audio.currentTime }
-    const onPause = () => { setIsPlaying(false); if (episodeRef.current.item) flushEpisode(false) }
+    const onPlay = () => { swappingRef.current = false; setIsPlaying(true); listenRef.current.lastTime = audio.currentTime }
+    // A pause while we still intend to play is just the old song being cut for a skip: keep the button on "pause".
+    const onPause = () => { if (swappingRef.current && !audio.ended) return; setIsPlaying(false); if (episodeRef.current.item) flushEpisode(false) }
     const onWaiting = () => setBuffering(true)
-    const onPlaying = () => setBuffering(false)
+    const onPlaying = () => { setBuffering(false); failuresRef.current = 0 }
     const onMeta = () => {
+      const s = stateRef.current
+      const cur = s.index >= 0 ? s.queue[s.index] : null // read live: this handler outlives any one song
       if (Number.isFinite(audio.duration) && audio.duration > 0) {
-        if (audio.duration <= 35 && (current?.duration_ms || 0) > 35000) {
-          setDuration(current.duration_ms)
+        if (audio.duration <= 35 && (cur?.duration_ms || 0) > 35000) {
+          setDuration(cur.duration_ms)
         } else {
           setDuration(audio.duration * 1000)
         }
-      } else if (current?.duration_ms) {
-        setDuration(current.duration_ms)
+      } else if (cur?.duration_ms) {
+        setDuration(cur.duration_ms)
       }
       setBuffering(false)
     }
+    // Give up on this song: say so once, then move on to the next one instead of leaving the player stuck.
+    const failSong = () => {
+      setBuffering(false)
+      failedRef.current = true
+      swappingRef.current = false
+      setIsPlaying(false)
+      toast.error('Playback failed for this song', { id: 'playback-failed' })
+      failuresRef.current += 1
+      const s = stateRef.current
+      if (wantPlayRef.current && failuresRef.current < 3 && s.index + 1 < s.queue.length && !sessionRef.current) {
+        dispatch({ type: 'next' })
+      } else {
+        wantPlayRef.current = false
+      }
+    }
     const onEnded = () => {
+      if (upgradeRef.current && upgradeRef.current === listenRef.current.songId) { setBuffering(true); return } // preview ran out; the full track is about to swap in
       flushListen(true)
       if (episodeRef.current.item) flushEpisode(true)
       if (sessionRef.current) {
@@ -231,11 +304,11 @@ export function PlayerProvider({ children }) {
         return
       }
       const songId = listenRef.current.songId
-      if (!audio.src || !songId) return
+      // Stale error from a src we've already replaced (or never set): not about the song now playing.
+      if (!songId || !srcRef.current || audio.src !== srcRef.current) return
       if (retriedRef.current === songId) {
         // Already retried with a fresh URL: the source itself is failing (e.g. a provider outage).
-        setBuffering(false)
-        toast.error('Playback failed for this song')
+        failSong()
         return
       }
       retriedRef.current = songId
@@ -243,12 +316,13 @@ export function PlayerProvider({ children }) {
       const at = audio.currentTime
       try {
         const url = await streamUrlFor(songId, true)
+        if (listenRef.current.songId !== songId) return // the user moved on while we were fetching
         audio.src = url
-        audio.currentTime = at
-        if (wantPlayRef.current) await audio.play()
+        srcRef.current = audio.src
+        if (at > 0) audio.addEventListener('loadedmetadata', () => { audio.currentTime = at }, { once: true })
+        if (wantPlayRef.current) audio.play().catch(() => {})
       } catch {
-        setBuffering(false)
-        toast.error('Playback failed for this song')
+        if (listenRef.current.songId === songId) failSong()
       }
     }
     const events = { timeupdate: onTime, play: onPlay, pause: onPause, waiting: onWaiting, playing: onPlaying,
@@ -311,6 +385,8 @@ export function PlayerProvider({ children }) {
       return
     }
     wantPlayRef.current = true
+    failuresRef.current = 0
+    setIsPlaying(true)
     const same = stateRef.current.queue[stateRef.current.index]?.id === playable[startIndex]?.id
     dispatch({ type: 'load', songs: playable, startIndex, context })
     if (same) {
@@ -323,23 +399,42 @@ export function PlayerProvider({ children }) {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.play()
     wantPlayRef.current = true
+    swappingRef.current = false
+    isPlayingRef.current = true
     if (engineRef.current === 'spotify') return spotifyRef.current.resume()
-    audioRef.current?.play().catch(() => {})
+    const audio = audioRef.current
+    if (!audio) return
+    if (audio.error || failedRef.current || !audio.getAttribute('src')) {
+      // Nothing usable is loaded (a failed song, or still fetching the URL): (re)load the current track, which starts playing.
+      if (stateRef.current.index >= 0 && (audio.error || failedRef.current)) {
+        failuresRef.current = 0
+        failedRef.current = false
+        urlCache.current.clear()
+        dispatch({ type: 'restart' })
+      }
+      setIsPlaying(true)
+      return
+    }
+    setIsPlaying(true) // optimistic: the button flips on click, not after the audio element reports back
+    audio.play().catch(() => { isPlayingRef.current = false; setIsPlaying(false) })
   }, [memberBlocked])
 
   const pause = useCallback(() => {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.pause()
     wantPlayRef.current = false
+    swappingRef.current = false
+    isPlayingRef.current = false
+    setIsPlaying(false)
     if (engineRef.current === 'spotify') return spotifyRef.current.pause()
     audioRef.current?.pause()
   }, [memberBlocked])
 
   const toggle = useCallback(() => {
     if (!stateRef.current.queue.length && !sessionRef.current) return
-    const paused = engineRef.current === 'spotify' ? !isPlayingRef.current : audioRef.current?.paused
-    if (paused) play()
-    else pause()
+    // Follow what the button shows (updated optimistically), not the audio element, which lags while a song loads.
+    if (isPlayingRef.current) pause()
+    else play()
   }, [play, pause])
 
   const seek = useCallback((ms) => {
@@ -354,7 +449,10 @@ export function PlayerProvider({ children }) {
     if (memberBlocked()) return
     if (sessionRef.current?.isHost) return sessionRef.current.controls.next()
     wantPlayRef.current = true
+    failuresRef.current = 0
     flushListen(false)
+    setIsPlaying(true)
+    if (audioRef.current && !audioRef.current.paused) { swappingRef.current = true; audioRef.current.pause() } // cut the old song immediately
     dispatch({ type: 'next' })
   }, [memberBlocked, flushListen])
 
@@ -366,24 +464,38 @@ export function PlayerProvider({ children }) {
       seek(0)
       return
     }
-    if (stateRef.current.index === 0) {
-      if (stateRef.current.repeat === 'all' && stateRef.current.queue.length > 1) {
-        wantPlayRef.current = true
-        dispatch({ type: 'prev' })
-        return
-      }
+    if (stateRef.current.index === 0 && !(stateRef.current.repeat === 'all' && stateRef.current.queue.length > 1)) {
       seek(0)
       return
     }
     wantPlayRef.current = true
+    failuresRef.current = 0
+    setIsPlaying(true)
+    if (audioRef.current && !audioRef.current.paused) { swappingRef.current = true; audioRef.current.pause() }
     dispatch({ type: 'prev' })
   }, [memberBlocked, seek])
 
   const jumpTo = useCallback((index) => {
     if (memberBlocked()) return
     wantPlayRef.current = true
+    failuresRef.current = 0
+    setIsPlaying(true)
     dispatch({ type: 'jump', index })
   }, [memberBlocked])
+
+  // Warm the next song's stream URL so Next / auto-advance starts without a network round trip.
+  const nextId = state.index >= 0 ? state.queue[state.index + 1]?.id : null
+  const nextIsEpisode = state.index >= 0 && isEpisode(state.queue[state.index + 1])
+  useEffect(() => {
+    if (nextId && !nextIsEpisode && getAccessToken()) streamUrlFor(nextId).catch(() => {})
+  }, [nextId, nextIsEpisode, streamUrlFor])
+
+  /** Warm a song's stream URL (e.g. on hover) so pressing play starts it with no lookup wait. Safe to call repeatedly. */
+  const prefetch = useCallback((song) => {
+    if (!song?.id || isEpisode(song) || isUnavailable(song) || !getAccessToken()) return
+    if (inflightRef.current.has(song.id)) return
+    inflightRef.current.set(song.id, streamUrlFor(song.id).catch(() => {}).finally(() => inflightRef.current.delete(song.id)))
+  }, [streamUrlFor])
 
   const addToQueue = useCallback((song) => {
     if (sessionRef.current) {
@@ -519,17 +631,25 @@ export function PlayerProvider({ children }) {
   })
 
   const value = useMemo(() => ({
-    ...state, current, isPlaying, position, duration, buffering, session,
-    playList, play, pause, toggle, seek, next, prev, jumpTo, addToQueue, follow, setSession,
+    ...state, current, isPlaying, duration, buffering, session, getPosition: () => positionRef.current,
+    playList, play, pause, toggle, seek, next, prev, jumpTo, addToQueue, follow, setSession, prefetch,
     removeFromQueue: (index) => dispatch({ type: 'remove', index }),
     toggleShuffle: () => dispatch({ type: 'toggleShuffle' }),
     cycleRepeat: () => dispatch({ type: 'cycleRepeat' }),
     setVolume: (v) => dispatch({ type: 'volume', value: v }),
     toggleMute: () => dispatch({ type: 'toggleMute' }),
-  }), [state, current, isPlaying, position, duration, buffering, session, playList, play, pause, toggle, seek, next,
-    prev, jumpTo, addToQueue, follow])
+  }), [state, current, isPlaying, duration, buffering, session, playList, play, pause, toggle, seek, next,
+    prev, jumpTo, addToQueue, follow, prefetch])
 
-  return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>
+  return (
+    <PlayerContext.Provider value={value}>
+      <PositionContext.Provider value={position}>{children}</PositionContext.Provider>
+    </PlayerContext.Provider>
+  )
+}
+
+export function usePlayerPosition() {
+  return useContext(PositionContext)
 }
 
 export function usePlayer() {

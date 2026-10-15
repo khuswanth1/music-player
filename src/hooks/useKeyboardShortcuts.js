@@ -21,7 +21,7 @@ function isTyping(target) {
 
 /** Global player shortcuts; ignored while typing in a form field. */
 export function useKeyboardShortcuts(playerState, { onSearch, onToggleQueue, onHelp }) {
-  // The player object changes on every position tick; read it through a ref so the listener binds once.
+  // The player object changes whenever playback state changes; read it through a ref so the listener binds once.
   const playerRef = useRef(playerState)
   playerRef.current = playerState
   useEffect(() => {
@@ -34,8 +34,8 @@ export function useKeyboardShortcuts(playerState, { onSearch, onToggleQueue, onH
       }
       const handlers = {
         ' ': () => player.toggle(),
-        ArrowRight: () => (e.shiftKey ? player.next() : player.seek(Math.min(player.duration, player.position + 5000))),
-        ArrowLeft: () => (e.shiftKey ? player.prev() : player.seek(Math.max(0, player.position - 5000))),
+        ArrowRight: () => (e.shiftKey ? player.next() : player.seek(Math.min(player.duration, player.getPosition() + 5000))),
+        ArrowLeft: () => (e.shiftKey ? player.prev() : player.seek(Math.max(0, player.getPosition() - 5000))),
         ArrowUp: () => player.setVolume(player.volume + 0.1),
         ArrowDown: () => player.setVolume(player.volume - 0.1),
         m: () => player.toggleMute(),

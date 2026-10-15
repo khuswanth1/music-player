@@ -59,6 +59,8 @@ export function playerReducer(state, action) {
       if (state.repeat === 'all' && state.queue.length) return { ...state, index: 0, queuedAhead: 0 }
       return { ...state, ended: (state.ended || 0) + 1 }
     }
+    case 'restart': // reload the current track (e.g. retry after a failure)
+      return { ...state, restartToken: (state.restartToken || 0) + 1 }
     case 'prev':
       if (state.index === 0 && state.repeat === 'all' && state.queue.length > 1) {
         return { ...state, index: state.queue.length - 1, queuedAhead: 0 }

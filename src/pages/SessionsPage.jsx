@@ -4,7 +4,7 @@ import { Copy, Crown, ListPlus, LogOut, Pause, Play, Search, SkipForward, Users,
 import { catalogApi } from '../api/endpoints'
 import { Avatar, Button, Cover, EmptyState, Field, inputClass, Spinner } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
-import { usePlayer } from '../context/PlayerContext'
+import { usePlayerPosition } from '../context/PlayerContext'
 import { useSession } from '../context/SessionContext'
 import { useToast } from '../context/ToastContext'
 import { useApi, useDebounce } from '../hooks/useApi'
@@ -76,7 +76,7 @@ function AddToSession() {
 
 export default function SessionsPage() {
   const { active, presence, isHost, control, leave } = useSession()
-  const { position } = usePlayer()
+  const position = usePlayerPosition()
   const toast = useToast()
   if (!active) return <StartOrJoin />
   const song = active.current_song

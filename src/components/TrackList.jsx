@@ -166,7 +166,7 @@ export function TrackMenu({ song, onRemove, onMoveUp, onMoveDown }) {
  * onReorder(from, to) enables drag-and-drop reordering.
  */
 export default function TrackList({ items, context, showAlbum = true, showCover = true, showAdded = false, onReorder, numbered = true }) {
-  const { current, isPlaying, playList, toggle } = usePlayer()
+  const { current, isPlaying, playList, toggle, prefetch } = usePlayer()
   const [dragFrom, setDragFrom] = useState(null)
   const [dragOver, setDragOver] = useState(null)
   const dragFromRef = useRef(null) // read by drop; state alone can be stale if events arrive before a re-render
@@ -204,6 +204,7 @@ export default function TrackList({ items, context, showAlbum = true, showCover 
               setDragFrom(null)
               setDragOver(null)
             }}
+            onPointerEnter={() => prefetch(song)}
             onDoubleClick={() => !unavailable && playAt(index)}
             title={unavailable ? song.restriction_reason || undefined : undefined}
             className={`group grid grid-cols-[2rem_1fr_auto] items-center gap-4 rounded-md px-3 py-1.5 hover:bg-white/10 md:grid-cols-[2rem_minmax(0,4fr)_minmax(0,3fr)_minmax(0,2fr)_6rem]

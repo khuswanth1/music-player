@@ -34,7 +34,7 @@ export const catalogApi = {
   genre: (slug) => api(`/genres/${slug}`),
   songs: (query) => api('/songs', { query }),
   song: (id) => api(`/songs/${id}`),
-  streamUrl: (id) => api(`/songs/${id}/stream-url`),
+  streamUrl: (id, fast = false) => api(`/songs/${id}/stream-url`, fast ? { query: { fast: true } } : {}),
   artists: (query) => api('/artists', { query }),
   artist: (id) => api(`/artists/${id}`),
   artistTopSongs: (id) => api(`/artists/${id}/top-songs`),

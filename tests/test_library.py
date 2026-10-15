@@ -54,7 +54,7 @@ def test_history_and_play_counts(client, catalog, factory):
     recent = client.get("/api/v1/me/recently-played", headers=h).json()
     assert [s["id"] for s in recent] == [song["id"]]  # distinct songs
     # every context the web player reports must be accepted (regression: these were rejected with 422)
-    for ctx in ("recommendations", "trending", "history", "liked", "genre"):
+    for ctx in ("recommendations", "trending", "history", "liked", "genre", "language", "chart", "podcast", "private-album", "mix"):
         res = client.post("/api/v1/me/history", json={"song_id": song["id"], "ms_played": 10, "context_type": ctx}, headers=h)
         assert res.status_code == 201, ctx
     client.delete("/api/v1/me/history", headers=h)

@@ -6,7 +6,7 @@ from app.core.permissions import permissions_for
 from app.core.security import hash_password, utcnow, verify_password
 from app.models import User
 from app.repositories import users as users_repo
-from app.schemas.user import ChangePasswordRequest, UpdateProfileRequest, UserMe
+from app.schemas.user import ChangePasswordRequest, UiPrefs, UpdateProfileRequest, UserMe
 from app.services.entitlements import is_premium
 from app.storage.backends import get_storage, media_url
 from app.storage.validation import validate_image
@@ -18,6 +18,8 @@ def to_me(db: Session, user: User) -> UserMe:
         role=user.role_name, permissions=permissions_for(user.role_name), is_premium=is_premium(db, user),
         has_password=user.password_hash is not None, google_linked=user.google_sub is not None,
         created_at=user.created_at, preferred_languages=list(user.preferred_languages or []),
+        preferred_genres=list(user.preferred_genres or []), onboarded=user.onboarded_at is not None,
+        ui_prefs=UiPrefs.model_validate(user.ui_prefs or {}),
         date_of_birth=user.date_of_birth, gender=user.gender, marketing_emails=user.marketing_emails,
     )
 

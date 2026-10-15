@@ -2,7 +2,7 @@ import uuid
 from datetime import date, datetime
 
 from sqlalchemy import Boolean, CheckConstraint, Date, DateTime, ForeignKey, Index, SmallInteger, String, Text
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, CreatedAt, Timestamps, UUIDPk
@@ -30,6 +30,12 @@ class User(UUIDPk, Timestamps, Base):
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Language codes (languages.code) the user wants more of; validated on write.
     preferred_languages: Mapped[list[str]] = mapped_column(ARRAY(String(12)), default=list, server_default="{}")
+    # Genre slugs picked during onboarding ("music journey"); they seed recommendations until listening history does.
+    preferred_genres: Mapped[list[str]] = mapped_column(ARRAY(String(40)), default=list, server_default="{}")
+    # Set once the first-run onboarding has been finished or skipped; null means it still has to be offered.
+    onboarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Display choices: which home shelves to show and in what order, density, ... (validated in schemas.user.UiPrefs).
+    ui_prefs: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}")
     date_of_birth: Mapped[date | None] = mapped_column(Date)
     gender: Mapped[str | None] = mapped_column(String(24))
     marketing_emails: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")

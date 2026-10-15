@@ -114,6 +114,8 @@ def recommendations(db: Session, user: User, limit: int = 20) -> list[Song]:
                                       .where(signals.c.language.is_not(None)).group_by(signals.c.language)).all())
     for (artist_id,) in db.execute(select(FollowedArtist.artist_id).where(FollowedArtist.user_id == user.id)):
         artist_scores[artist_id] = artist_scores.get(artist_id, 0) + 5
+    for gid in db.scalars(select(Genre.id).where(Genre.slug.in_(list(user.preferred_genres or [])))):
+        genre_scores[gid] = genre_scores.get(gid, 0) + 4
     preferred = list(user.preferred_languages or [])
     for code in preferred:
         language_scores[code] = language_scores.get(code, 0) + 6

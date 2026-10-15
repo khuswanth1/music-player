@@ -36,6 +36,8 @@ from app.schemas.music import (
     GenreCount,
     LanguageDetail,
     LanguageOut,
+    OnboardingIn,
+    OnboardingOut,
     PreferredLanguages,
     ProviderOut,
     ProviderPolicyOut,
@@ -164,6 +166,18 @@ def set_my_languages(data: PreferredLanguages, user: CurrentUser, db: DB):
     user.preferred_languages = codes
     db.commit()
     return PreferredLanguages(languages=codes)
+
+
+@router.put("/me/onboarding", response_model=OnboardingOut, tags=["languages"],
+            summary="Mark first-run onboarding as done (finished or skipped), optionally saving the picked genres")
+def complete_onboarding(data: OnboardingIn, user: CurrentUser, db: DB):
+    if data.genres is not None:
+        known = set(db.scalars(select(Genre.slug).where(Genre.slug.in_(data.genres))))
+        user.preferred_genres = [g for g in dict.fromkeys(data.genres) if g in known]
+    if user.onboarded_at is None:  # idempotent: the first completion time is kept
+        user.onboarded_at = utcnow()
+    db.commit()
+    return OnboardingOut(genres=list(user.preferred_genres or []))
 
 
 # --- providers -----------------------------------------------------------------------------------

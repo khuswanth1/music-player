@@ -120,6 +120,17 @@ class PreferredLanguages(BaseModel):
     languages: list[str] = Field(default_factory=list, max_length=20)
 
 
+class OnboardingIn(BaseModel):
+    """Finishing (or skipping) first-run onboarding. Every field is optional; an empty body means "skipped"."""
+
+    genres: list[str] | None = Field(default=None, max_length=20)
+
+
+class OnboardingOut(BaseModel):
+    onboarded: bool = True
+    genres: list[str] = Field(default_factory=list)
+
+
 class TakedownRequest(BaseModel):
     reason: str = Field(default="Removed following a rights notice", min_length=3, max_length=255)
 

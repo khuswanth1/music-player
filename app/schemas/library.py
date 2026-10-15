@@ -27,9 +27,11 @@ class HistoryCreate(BaseModel):
     song_id: uuid.UUID
     ms_played: int = Field(ge=0, le=24 * 3600 * 1000)
     completed: bool = False
-    # Where the play started (album, playlist, language, chart, ...). The web player reports many kinds and adds new
-    # ones over time, so any short slug is accepted instead of a fixed list that 422s a legitimate play.
-    context_type: str | None = Field(default=None, pattern="^[a-z][a-z_-]{0,19}$")
+    # Where the play started; must cover every context the web player reports (a play from a new kind of page that is
+    # missing here is rejected with 422 and silently never reaches the history).
+    context_type: str | None = Field(
+        default=None, pattern="^(album|playlist|artist|liked|search|queue|session|genre|recommendations|trending|history"
+                              "|language|languages|chart|song|track|soundtrack|podcast|private-album|mix)$")
     context_id: uuid.UUID | None = None
 
 

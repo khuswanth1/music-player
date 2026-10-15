@@ -90,6 +90,26 @@ def test_preferred_languages(client, listener):
     assert bad.status_code == 422
 
 
+def test_onboarding_is_offered_once_and_skip_needs_no_choices(client, listener):
+    _, h = listener
+    me = client.get("/api/v1/me", headers=h).json()
+    assert me["onboarded"] is False and me["preferred_genres"] == []  # a brand-new account is offered onboarding
+    skipped = client.put("/api/v1/me/onboarding", json={}, headers=h)  # Skip: no languages, genres or artists
+    assert skipped.status_code == 200 and skipped.json() == {"onboarded": True, "genres": []}
+    me = client.get("/api/v1/me", headers=h).json()
+    assert me["onboarded"] is True and me["preferred_languages"] == []
+    assert client.put("/api/v1/me/onboarding", json={}, headers=h).status_code == 200  # idempotent
+
+
+def test_onboarding_saves_known_genres_only(client, listener, catalog):
+    _, h = listener
+    res = client.put("/api/v1/me/onboarding", json={"genres": ["synthwave", "no-such-genre", "synthwave"]}, headers=h)
+    assert res.json() == {"onboarded": True, "genres": ["synthwave"]}
+    assert client.get("/api/v1/me", headers=h).json()["preferred_genres"] == ["synthwave"]
+    client.put("/api/v1/me/onboarding", json={}, headers=h)  # a later skip-style call must not wipe saved picks
+    assert client.get("/api/v1/me", headers=h).json()["preferred_genres"] == ["synthwave"]
+
+
 def test_recommendations_and_home_favour_preferred_languages(client, fake, listener):
     _, h = listener
     add(track("ta1", "Tamil hit", language="ta", popularity=0.1), track("en1", "English hit", language="en", popularity=0.9))
@@ -100,6 +120,60 @@ def test_recommendations_and_home_favour_preferred_languages(client, fake, liste
     home = client.get("/api/v1/browse/home", headers=h).json()
     assert [s["title"] for s in home["in_your_languages"]] == ["Tamil hit"]
     assert {lang["code"] for lang in home["languages"]} == {"ta", "en"}
+
+
+# --- personal mixes -----------------------------------------------------------------------------
+
+def _songs(client, fake, h, word="song"):
+    """A small Telugu + Hindi catalog. `word` makes the search unique so a cached search from another test can't hide it."""
+    add(*[track(f"{word}te{i}", f"Telugu {word} {i}", language="te", popularity=0.9 - i / 20) for i in range(5)],
+        *[track(f"{word}hi{i}", f"Hindi {word} {i}", language="hi", popularity=0.5 - i / 20) for i in range(5)])
+    return search(client, h, word)
+
+
+def test_each_person_gets_mixes_built_from_their_own_choices(client, fake, factory):
+    a, b = factory.user(), factory.user()
+    ha, hb = factory.headers(a), factory.headers(b)
+    _songs(client, fake, ha, "choices")
+    client.put("/api/v1/me/languages", json={"languages": ["te"]}, headers=ha)
+    client.put("/api/v1/me/languages", json={"languages": ["hi"]}, headers=hb)
+
+    mixes_a = {m["id"]: m for m in client.get("/api/v1/me/mixes", headers=ha).json()}
+    mixes_b = {m["id"]: m for m in client.get("/api/v1/me/mixes", headers=hb).json()}
+    assert "language-te" in mixes_a and "language-hi" not in mixes_a
+    assert "language-hi" in mixes_b and "language-te" not in mixes_b
+    assert mixes_a["language-te"]["title"] == "Telugu Mix" and mixes_a["language-te"]["song_count"] == 5
+    assert len(mixes_a["language-te"]["preview"]) == 4
+    detail = client.get("/api/v1/me/mixes/language-te", headers=ha).json()
+    assert {s["title"] for s in detail["songs"]} == {f"Telugu choices {i}" for i in range(5)}
+    # Discover only offers songs in the person's own languages that they haven't played
+    assert {s["language"] for s in mixes_a["discover"]["preview"]} == {"te"}
+
+
+def test_a_mix_is_stable_within_a_day_and_never_a_stranger_s(client, fake, factory):
+    a = factory.user()
+    h = factory.headers(a)
+    _songs(client, fake, h, "stable")
+    client.put("/api/v1/me/languages", json={"languages": ["te"]}, headers=h)
+    r = client.get("/api/v1/me/mixes/language-te", headers=h)
+    assert r.status_code == 200, r.text
+    first = [s["id"] for s in r.json()["songs"]]
+    again = [s["id"] for s in client.get("/api/v1/me/mixes/language-te", headers=h).json()["songs"]]
+    assert first == again
+    assert client.get("/api/v1/me/mixes/language-xx", headers=h).status_code == 404
+    assert client.get("/api/v1/me/mixes/bogus", headers=h).status_code == 404
+    assert client.get("/api/v1/me/mixes").status_code == 401
+
+
+def test_listening_adds_an_on_repeat_mix(client, fake, factory):
+    user = factory.user()
+    h = factory.headers(user)
+    ids = [s["id"] for s in _songs(client, fake, h, "repeat")["songs"]][:4]
+    assert "on-repeat" not in {m["id"] for m in client.get("/api/v1/me/mixes", headers=h).json()}
+    for sid in ids:
+        client.post("/api/v1/me/history", json={"song_id": sid, "ms_played": 30000}, headers=h)
+    mixes = {m["id"]: m for m in client.get("/api/v1/me/mixes", headers=h).json()}
+    assert mixes["on-repeat"]["song_count"] == 4
 
 
 # --- federated search ---------------------------------------------------------------------------

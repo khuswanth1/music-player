@@ -11,7 +11,9 @@ from app.schemas.catalog import AlbumOut, ArtistOut, GenreOut, SongOut
 from app.schemas.common import Page
 from app.schemas.playlist import PlaylistSummary
 from app.services import catalog as catalog_svc
+from app.core.errors import NotFound
 from app.services import discovery as svc
+from app.services import mixes as mix_svc
 from app.services.library import recently_played_songs
 from app.services.playlists import summarize_many
 
@@ -139,3 +141,52 @@ def trending(db: DB, user: OptionalUser, limit: int = Query(20, ge=1, le=50)):
 @router.get("/me/recommendations", response_model=list[SongOut])
 def recommendations(db: DB, user: CurrentUser, limit: int = Query(20, ge=1, le=50)):
     return catalog_svc.song_outs(db, user, svc.recommendations(db, user, limit))
+
+
+# --- personal mixes ------------------------------------------------------------------------------
+
+class MixOut(BaseModel):
+    id: str
+    kind: str
+    title: str
+    subtitle: str
+    color: str
+    song_count: int
+    preview: list[SongOut]  # the first few songs, for the cover collage
+
+
+class MixDetail(MixOut):
+    songs: list[SongOut]
+
+
+def _mix_out(db, user, mix: mix_svc.Mix) -> dict:
+    songs = catalog_svc.song_outs(db, user, mix.songs)
+    return {"id": mix.id, "kind": mix.kind, "title": mix.title, "subtitle": mix.subtitle, "color": mix.color,
+            "song_count": len(songs), "preview": songs[:4], "songs": songs}
+
+
+@router.get("/me/mixes", response_model=list[MixOut], tags=["mixes"],
+            summary="Playlists made only for you from your languages, genres, follows and listening")
+def my_mixes(db: DB, user: CurrentUser):
+    return [MixOut(**_mix_out(db, user, m)) for m in mix_svc.mixes_for(db, user)]
+
+
+@router.get("/me/mixes/{mix_id}", response_model=MixDetail, tags=["mixes"])
+def my_mix(mix_id: str, db: DB, user: CurrentUser):
+    mix = mix_svc.mix_by_id(db, user, mix_id)
+    if mix is None or not mix.songs:
+        raise NotFound("That mix isn't available for you")
+    return MixDetail(**_mix_out(db, user, mix))
+
+
+class ForYou(BaseModel):
+    artists: list[ArtistOut]
+    albums: list[AlbumOut]
+    playlists: list[PlaylistSummary]
+
+
+@router.get("/me/for-you", response_model=ForYou, tags=["mixes"],
+            summary="Artists, albums and playlists matched to my languages, genres, likes and follows")
+def for_you(db: DB, user: CurrentUser):
+    return ForYou(artists=mix_svc.artists_for(db, user), albums=mix_svc.albums_for(db, user),
+                  playlists=summarize_many(db, mix_svc.playlists_for(db, user)))

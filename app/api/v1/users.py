@@ -10,7 +10,7 @@ from app.core.rate_limit import client_ip
 from app.models import Playlist, User
 from app.schemas.common import Message
 from app.schemas.playlist import PlaylistSummary
-from app.schemas.user import ChangePasswordRequest, TokenResponse, UpdateProfileRequest, UserMe, UserPublic
+from app.schemas.user import ChangePasswordRequest, TokenResponse, UiPrefs, UpdateProfileRequest, UserMe, UserPublic
 from app.services import auth as auth_service
 from app.services import users as user_service
 from app.services.playlists import summarize_many
@@ -26,6 +26,13 @@ def me(user: CurrentUser, db: DB):
 @router.patch("/me", response_model=UserMe)
 def update_me(data: UpdateProfileRequest, user: CurrentUser, db: DB):
     return user_service.to_me(db, user_service.update_profile(db, user, data))
+
+
+@router.put("/me/settings", response_model=UiPrefs, summary="Save how my player looks: home shelves, their order, density")
+def save_settings(data: UiPrefs, user: CurrentUser, db: DB):
+    user.ui_prefs = data.model_dump()
+    db.commit()
+    return data
 
 
 @router.post("/me/password", response_model=TokenResponse,

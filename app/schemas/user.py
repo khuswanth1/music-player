@@ -100,6 +100,26 @@ class UserPublic(ORMModel):
     avatar_url: str | None
 
 
+HOME_SECTIONS = ("recent", "mixes", "languages", "language_chips", "for_you", "recommended", "featured", "trending",
+                 "new", "world", "playlists", "genres")
+
+
+class UiPrefs(BaseModel):
+    """How this person wants their player to look. Unknown shelf names are rejected, not silently kept."""
+
+    home_order: list[str] = Field(default_factory=list, max_length=len(HOME_SECTIONS))
+    home_hidden: list[str] = Field(default_factory=list, max_length=len(HOME_SECTIONS))
+    density: Literal["comfortable", "compact"] = "comfortable"
+
+    @field_validator("home_order", "home_hidden")
+    @classmethod
+    def _known_sections(cls, v: list[str]) -> list[str]:
+        bad = [k for k in v if k not in HOME_SECTIONS]
+        if bad:
+            raise ValueError(f"Unknown home section: {bad[0]}")
+        return list(dict.fromkeys(v))
+
+
 class UserMe(ORMModel):
     id: uuid.UUID
     email: str
@@ -115,6 +135,9 @@ class UserMe(ORMModel):
     gender: Gender | None = None
     marketing_emails: bool = True
     preferred_languages: list[str] = []
+    preferred_genres: list[str] = []
+    ui_prefs: UiPrefs = Field(default_factory=UiPrefs)
+    onboarded: bool = True
 
 
 class TokenResponse(BaseModel):

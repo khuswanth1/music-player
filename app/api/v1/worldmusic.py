@@ -3,7 +3,10 @@
 import uuid
 from typing import Annotated, Literal
 
+from concurrent.futures import ThreadPoolExecutor
+
 from fastapi import APIRouter, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 
 from app.api.deps import DB, CurrentUser, OptionalUser, PageParams
@@ -11,7 +14,7 @@ from app.api.v1 import streaming
 from app.api.v1.music import _provider_fanout_limit, _warm_language
 from app.core.errors import NotFound
 from app.models import Album, Artist, Genre, Song
-from app.music import federation, queryparse, soundtracks
+from app.music import artist_photos, federation, queryparse, soundtracks
 from app.music import languages as langs
 from app.music.countries import country_name
 from app.music.genres import CANONICAL
@@ -449,6 +452,30 @@ def artist_search(
         items=items,
         providers=[ProviderStatusOut(key=s.key, name=s.name, status=s.status, count=s.count, message=s.message) for s in statuses],
     )
+
+
+class ArtistPhotosIn(BaseModel):
+    ids: list[uuid.UUID] = Field(max_length=40)
+
+
+@router.post(
+    "/music/artists/photos",
+    response_model=dict[uuid.UUID, str],
+    dependencies=[_provider_fanout_limit],
+    summary="Find real portraits for artists that only have album artwork; returns {artist_id: image_url} for those found",
+)
+def find_artist_photos(data: ArtistPhotosIn, db: DB, _: CurrentUser):
+    artists = [a for a in db.scalars(select(Artist).where(Artist.id.in_(data.ids))).unique() if not a.image_url]
+    with ThreadPoolExecutor(max_workers=8) as pool:  # lookups are independent network calls
+        urls = list(pool.map(lambda a: artist_photos.portrait_url(a.name), artists))
+    found: dict[uuid.UUID, str] = {}
+    for artist, url in zip(artists, urls, strict=True):
+        if url:
+            artist.image_url = url
+            found[artist.id] = url
+    if found:
+        db.commit()
+    return found
 
 
 @router.get(
